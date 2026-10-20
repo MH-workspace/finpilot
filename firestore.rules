@@ -1,0 +1,148 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // Default deny catch-all
+    match /{document=**} {
+      allow read, write: if false;
+    }
+
+    // Helper functions
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    function isOwner(userId) {
+      return isSignedIn() && request.auth.uid == userId;
+    }
+
+    function isValidId(id) {
+      return id is string && id.size() > 0 && id.size() <= 128 && id.matches('^[a-zA-Z0-9_\\-]+$');
+    }
+
+    function incoming() {
+      return request.resource.data;
+    }
+
+    function existing() {
+      return resource.data;
+    }
+
+    // Entity validations
+    function isValidUserProfile(data) {
+      return data.keys().hasAll(['id', 'email'])
+        && data.id is string && data.id.size() <= 128
+        && data.email is string && data.email.size() <= 256
+        && (!('displayName' in data) || (data.displayName is string && data.displayName.size() <= 128))
+        && (!('photoURL' in data) || (data.photoURL is string && data.photoURL.size() <= 2048))
+        && (!('createdAt' in data) || (data.createdAt is string && data.createdAt.size() <= 64))
+        && (!('updatedAt' in data) || (data.updatedAt is string && data.updatedAt.size() <= 64));
+    }
+
+    function isValidTransaction(data, userId) {
+      return data.keys().hasAll(['id', 'userId', 'date', 'description', 'category', 'type', 'amount'])
+        && data.userId == userId
+        && data.id is string && data.id.size() <= 128
+        && data.date is string && data.date.size() <= 32
+        && data.description is string && data.description.size() <= 256
+        && data.category is string && data.category.size() <= 64
+        && (data.type == 'Income' || data.type == 'Expense')
+        && data.amount is number && data.amount > 0
+        && (!('notes' in data) || (data.notes is string && data.notes.size() <= 1000))
+        && (!('updatedAt' in data) || (data.updatedAt is string && data.updatedAt.size() <= 64));
+    }
+
+    function isValidBudget(data, userId) {
+      return data.keys().hasAll(['id', 'userId', 'category', 'monthlyLimit'])
+        && data.userId == userId
+        && data.id is string && data.id.size() <= 128
+        && data.category is string && data.category.size() <= 64
+        && data.monthlyLimit is number && data.monthlyLimit >= 0
+        && (!('updatedAt' in data) || (data.updatedAt is string && data.updatedAt.size() <= 64));
+    }
+
+    function isValidSavingsGoal(data, userId) {
+      return data.keys().hasAll(['id', 'userId', 'name', 'targetAmount', 'savedAmount'])
+        && data.userId == userId
+        && data.id is string && data.id.size() <= 128
+        && data.name is string && data.name.size() <= 128
+        && data.targetAmount is number && data.targetAmount > 0
+        && data.savedAmount is number && data.savedAmount >= 0
+        && (!('targetDate' in data) || (data.targetDate is string && data.targetDate.size() <= 32))
+        && (!('notes' in data) || (data.notes is string && data.notes.size() <= 1000))
+        && (!('updatedAt' in data) || (data.updatedAt is string && data.updatedAt.size() <= 64));
+    }
+
+    function isValidRecurringRule(data, userId) {
+      return data.keys().hasAll(['id', 'userId', 'description', 'category', 'type', 'amount', 'frequency', 'nextDate', 'active'])
+        && data.userId == userId
+        && data.id is string && data.id.size() <= 128
+        && data.description is string && data.description.size() <= 256
+        && data.category is string && data.category.size() <= 64
+        && (data.type == 'Income' || data.type == 'Expense')
+        && data.amount is number && data.amount > 0
+        && (data.frequency == 'Weekly' || data.frequency == 'Bi-Weekly' || data.frequency == 'Monthly' || data.frequency == 'Yearly')
+        && data.nextDate is string && data.nextDate.size() <= 32
+        && data.active is bool
+        && (!('updatedAt' in data) || (data.updatedAt is string && data.updatedAt.size() <= 64));
+    }
+
+    function isValidUserSettings(data, userId) {
+      return data.keys().hasAll(['userId', 'currencySymbol', 'currencyCode', 'targetSavingsRate'])
+        && data.userId == userId
+        && data.currencySymbol is string && data.currencySymbol.size() <= 16
+        && data.currencyCode is string && data.currencyCode.size() <= 16
+        && (!('currencyName' in data) || (data.currencyName is string && data.currencyName.size() <= 64))
+        && data.targetSavingsRate is number && data.targetSavingsRate >= 0
+        && (!('updatedAt' in data) || (data.updatedAt is string && data.updatedAt.size() <= 64));
+    }
+
+    // Rules for User document
+    match /users/{userId} {
+      allow get: if isOwner(userId) && isValidId(userId);
+      allow create: if isOwner(userId) && isValidId(userId) && isValidUserProfile(incoming());
+      allow update: if isOwner(userId) && isValidId(userId) && isValidUserProfile(incoming());
+      allow delete: if isOwner(userId) && isValidId(userId);
+
+      // Subcollection: Transactions
+      match /transactions/{transactionId} {
+        allow read: if isOwner(userId);
+        allow create: if isOwner(userId) && isValidId(transactionId) && isValidTransaction(incoming(), userId);
+        allow update: if isOwner(userId) && isValidId(transactionId) && isValidTransaction(incoming(), userId);
+        allow delete: if isOwner(userId) && isValidId(transactionId);
+      }
+
+      // Subcollection: Budgets
+      match /budgets/{budgetId} {
+        allow read: if isOwner(userId);
+        allow create: if isOwner(userId) && isValidId(budgetId) && isValidBudget(incoming(), userId);
+        allow update: if isOwner(userId) && isValidId(budgetId) && isValidBudget(incoming(), userId);
+        allow delete: if isOwner(userId) && isValidId(budgetId);
+      }
+
+      // Subcollection: Goals
+      match /goals/{goalId} {
+        allow read: if isOwner(userId);
+        allow create: if isOwner(userId) && isValidId(goalId) && isValidSavingsGoal(incoming(), userId);
+        allow update: if isOwner(userId) && isValidId(goalId) && isValidSavingsGoal(incoming(), userId);
+        allow delete: if isOwner(userId) && isValidId(goalId);
+      }
+
+      // Subcollection: Recurring
+      match /recurring/{ruleId} {
+        allow read: if isOwner(userId);
+        allow create: if isOwner(userId) && isValidId(ruleId) && isValidRecurringRule(incoming(), userId);
+        allow update: if isOwner(userId) && isValidId(ruleId) && isValidRecurringRule(incoming(), userId);
+        allow delete: if isOwner(userId) && isValidId(ruleId);
+      }
+
+      // Subcollection: Settings
+      match /settings/{settingId} {
+        allow read: if isOwner(userId);
+        allow create: if isOwner(userId) && isValidId(settingId) && isValidUserSettings(incoming(), userId);
+        allow update: if isOwner(userId) && isValidId(settingId) && isValidUserSettings(incoming(), userId);
+        allow delete: if isOwner(userId) && isValidId(settingId);
+      }
+    }
+  }
+}

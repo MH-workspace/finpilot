@@ -1,0 +1,123 @@
+{
+  "entities": {
+    "UserProfile": {
+      "title": "UserProfile",
+      "description": "User profile containing basic metadata",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "maxLength": 128 },
+        "email": { "type": "string", "maxLength": 256 },
+        "displayName": { "type": "string", "maxLength": 128 },
+        "photoURL": { "type": "string", "maxLength": 1024 },
+        "createdAt": { "type": "string", "maxLength": 64 },
+        "updatedAt": { "type": "string", "maxLength": 64 }
+      },
+      "required": ["id", "email"]
+    },
+    "Transaction": {
+      "title": "Transaction",
+      "description": "A single financial transaction record",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "maxLength": 128 },
+        "userId": { "type": "string", "maxLength": 128 },
+        "date": { "type": "string", "maxLength": 32 },
+        "description": { "type": "string", "maxLength": 256 },
+        "category": { "type": "string", "maxLength": 64 },
+        "type": { "type": "string", "enum": ["Income", "Expense"] },
+        "amount": { "type": "number" },
+        "notes": { "type": "string", "maxLength": 1000 },
+        "createdAt": { "type": "string", "maxLength": 64 },
+        "updatedAt": { "type": "string", "maxLength": 64 }
+      },
+      "required": ["id", "userId", "date", "description", "category", "type", "amount"]
+    },
+    "Budget": {
+      "title": "Budget",
+      "description": "Monthly spending limit for a specific category",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "maxLength": 128 },
+        "userId": { "type": "string", "maxLength": 128 },
+        "category": { "type": "string", "maxLength": 64 },
+        "monthlyLimit": { "type": "number" },
+        "updatedAt": { "type": "string", "maxLength": 64 }
+      },
+      "required": ["id", "userId", "category", "monthlyLimit"]
+    },
+    "SavingsGoal": {
+      "title": "SavingsGoal",
+      "description": "A financial milestone savings target",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "maxLength": 128 },
+        "userId": { "type": "string", "maxLength": 128 },
+        "name": { "type": "string", "maxLength": 128 },
+        "targetAmount": { "type": "number" },
+        "savedAmount": { "type": "number" },
+        "targetDate": { "type": "string", "maxLength": 32 },
+        "notes": { "type": "string", "maxLength": 1000 },
+        "updatedAt": { "type": "string", "maxLength": 64 }
+      },
+      "required": ["id", "userId", "name", "targetAmount", "savedAmount"]
+    },
+    "RecurringRule": {
+      "title": "RecurringRule",
+      "description": "A scheduled recurring income or expense rule",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "maxLength": 128 },
+        "userId": { "type": "string", "maxLength": 128 },
+        "description": { "type": "string", "maxLength": 256 },
+        "category": { "type": "string", "maxLength": 64 },
+        "type": { "type": "string", "enum": ["Income", "Expense"] },
+        "amount": { "type": "number" },
+        "frequency": { "type": "string", "enum": ["Weekly", "Bi-Weekly", "Monthly", "Yearly"] },
+        "nextDate": { "type": "string", "maxLength": 32 },
+        "active": { "type": "boolean" },
+        "updatedAt": { "type": "string", "maxLength": 64 }
+      },
+      "required": ["id", "userId", "description", "category", "type", "amount", "frequency", "nextDate", "active"]
+    },
+    "UserSettingsDoc": {
+      "title": "UserSettingsDoc",
+      "description": "User preferences for currency and benchmarks",
+      "type": "object",
+      "properties": {
+        "userId": { "type": "string", "maxLength": 128 },
+        "currencySymbol": { "type": "string", "maxLength": 16 },
+        "currencyCode": { "type": "string", "maxLength": 16 },
+        "currencyName": { "type": "string", "maxLength": 64 },
+        "targetSavingsRate": { "type": "number" },
+        "updatedAt": { "type": "string", "maxLength": 64 }
+      },
+      "required": ["userId", "currencySymbol", "currencyCode", "targetSavingsRate"]
+    }
+  },
+  "firestore": {
+    "/users/{userId}": {
+      "schema": "UserProfile",
+      "description": "User profile document owned strictly by userId"
+    },
+    "/users/{userId}/transactions/{transactionId}": {
+      "schema": "Transaction",
+      "description": "User personal transactions subcollection"
+    },
+    "/users/{userId}/budgets/{budgetId}": {
+      "schema": "Budget",
+      "description": "User category budgets subcollection"
+    },
+    "/users/{userId}/goals/{goalId}": {
+      "schema": "SavingsGoal",
+      "description": "User savings goals subcollection"
+    },
+    "/users/{userId}/recurring/{ruleId}": {
+      "schema": "RecurringRule",
+      "description": "User recurring transactions subcollection"
+    },
+    "/users/{userId}/settings/{settingId}": {
+      "schema": "UserSettingsDoc",
+      "description": "User settings document"
+    }
+  }
+}

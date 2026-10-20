@@ -1,0 +1,6 @@
+{
+  "name": "FinPilot - Personal Finance & Wealth Intelligence",
+  "description": "Calm, intuitive personal finance: cash flow tracking, monthly category budgets, savings goals, recurring rules, and an AI financial advisor.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
