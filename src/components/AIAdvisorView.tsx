@@ -5,16 +5,13 @@ import {
   Bot,
   User,
   RefreshCw,
-  AlertCircle,
   Clock,
   CheckCircle2,
-  Trash2,
+  AlertCircle,
 } from 'lucide-react';
 import { Transaction, Budget, SavingsGoal, RecurringRule } from '../types/finance';
-import {
-  formatCurrency,
-  getMonthLabel,
-} from '../utils/formatters';
+import { formatCurrency, getMonthLabel } from '../utils/formatters';
+import { useAIChat } from '../context/AIChatContext';
 
 interface AIAdvisorViewProps {
   transactions: Transaction[];
@@ -25,13 +22,6 @@ interface AIAdvisorViewProps {
   currencySymbol: string;
   targetSavingsRate: number;
   userName?: string;
-}
-
-interface Message {
-  id: string;
-  sender: 'user' | 'assistant';
-  text: string;
-  timestamp: string;
 }
 
 const PROMPT_SUGGESTIONS = [
@@ -52,79 +42,37 @@ export const AIAdvisorView: React.FC<AIAdvisorViewProps> = ({
   targetSavingsRate,
   userName = '',
 }) => {
-  const storageKey = `finpilot_ai_chat_v3_${userName || 'guest'}`;
+  const {
+    messages,
+    isLoading,
+    sendMessage,
+    clearChat,
+    markChatAsRead,
+    setWelcomeIfNeeded,
+  } = useAIChat();
+
+  const [input, setInput] = useState('');
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLInputElement>(null);
 
-  // Generate personalized welcome message
-  const createWelcomeMessage = (name: string): Message => {
-    const greeting = name ? `Hello ${name}!` : 'Hello!';
-    return {
-      id: 'welcome',
-      sender: 'assistant',
-      text: `${greeting} I am your FinPilot Financial Copilot powered by Gemini.
-I am actively synced with your ledger for **${getMonthLabel(
-        selectedMonth
-      )}**, including ${transactions.length} recorded transactions, ${budgets.length} category budgets, and ${goals.length} active savings goals.
-
-Ask me anything about your spending, or tap one of the quick analysis inquiries below to start.`,
-      timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
-    };
-  };
-
-  // Initialize messages from localStorage or default
-  const [messages, setMessages] = useState<Message[]>(() => {
-    try {
-      const saved = localStorage.getItem(storageKey);
-      if (saved) {
-        const parsed = JSON.parse(saved);
-        if (Array.isArray(parsed) && parsed.length > 0) {
-          return parsed;
-        }
-      }
-    } catch {
-      // Fallback
-    }
-    return [createWelcomeMessage(userName)];
-  });
-
-  const [input, setInput] = useState('');
-  const [loading, setLoading] = useState(false);
-
-  // Auto-scroll chat to bottom smoothly
+  // Auto scroll when messages update
   const scrollToBottom = () => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
   };
 
   useEffect(() => {
     scrollToBottom();
-  }, [messages, loading]);
+  }, [messages, isLoading]);
 
-  // Persist messages to localStorage
+  // Mark chat as read when viewing this component
   useEffect(() => {
-    try {
-      localStorage.setItem(storageKey, JSON.stringify(messages));
-    } catch {
-      // Ignore quota errors
-    }
-  }, [messages, storageKey]);
+    markChatAsRead();
+  }, [markChatAsRead]);
 
-  // Update welcome message if user logs in on first view
+  // Update welcome message with user name if newly available
   useEffect(() => {
-    if (userName && messages.length === 1 && messages[0].id === 'welcome') {
-      setMessages([createWelcomeMessage(userName)]);
-    }
-  }, [userName]);
-
-  // Clear conversation
-  const handleClearChat = () => {
-    const initial = [createWelcomeMessage(userName)];
-    setMessages(initial);
-    try {
-      localStorage.setItem(storageKey, JSON.stringify(initial));
-    } catch {}
-    inputRef.current?.focus();
-  };
+    setWelcomeIfNeeded(userName, getMonthLabel(selectedMonth), transactions.length);
+  }, [userName, selectedMonth, transactions.length, setWelcomeIfNeeded]);
 
   // Compile full financial context for Gemini
   const monthTx = useMemo(
@@ -214,145 +162,16 @@ Ask me anything about your spending, or tap one of the quick analysis inquiries 
     recurring,
   ]);
 
-  // Fast rule-based fallback if offline or API key absent
-  const generateRuleBasedFallback = (prompt: string): string => {
-    const p = prompt.toLowerCase();
-    const namePrefix = userName ? `${userName}, ` : '';
-
-    if (p.includes('summarize')) {
-      return `### Financial Summary for ${namePrefix}${getMonthLabel(selectedMonth)}
-- **Total Inflow:** ${formatCurrency(monthIncome, currencySymbol)}
-- **Total Outflow:** ${formatCurrency(monthExpenses, currencySymbol)}
-- **Net Cashflow:** ${formatCurrency(monthNet, currencySymbol)}
-- **Savings Rate:** ${savingsRate.toFixed(1)}% (Your benchmark: ${targetSavingsRate}%)
-
-${
-  monthNet < 0
-    ? `⚠️ **Action required:** Your expenses exceed income by ${formatCurrency(
-        Math.abs(monthNet),
-        currencySymbol
-      )}. Consider freezing non-essential spending in categories like Shopping or Entertainment.`
-    : `✅ **Positive cashflow:** You retained ${formatCurrency(
-        monthNet,
-        currencySymbol
-      )}. You could assign part of this toward your active savings goals.`
-}`;
-    }
-
-    if (p.includes('overspending') || p.includes('trim') || p.includes('budget')) {
-      const overBudgets = budgets.filter((b) => (categoryTotals[b.category] || 0) > b.monthlyLimit);
-      if (overBudgets.length > 0) {
-        return `### Budget Review for ${namePrefix}${getMonthLabel(selectedMonth)}
-You have **${overBudgets.length} category** exceeding defined limits:
-${overBudgets
-  .map(
-    (b) =>
-      `- **${b.category}:** Spent ${formatCurrency(
-        categoryTotals[b.category] || 0,
-        currencySymbol
-      )} against limit of ${formatCurrency(b.monthlyLimit, currencySymbol)} (Over by ${formatCurrency(
-        (categoryTotals[b.category] || 0) - b.monthlyLimit,
-        currencySymbol
-      )})`
-  )
-  .join('\n')}
-
-**Recommendation:** Review these transactions in the Transactions tab and consider lowering flexible subscriptions.`;
-      }
-      return `Good news, ${userName || 'friend'}! None of your budgeted categories have exceeded their monthly limits in ${getMonthLabel(
-        selectedMonth
-      )}. Your highest category spend is **${
-        Object.entries(categoryTotals).sort((a, b) => b[1] - a[1])[0]?.[0] || 'N/A'
-      }**.`;
-    }
-
-    if (p.includes('50/30/20')) {
-      const needs = monthIncome * 0.5;
-      const wants = monthIncome * 0.3;
-      const savings = monthIncome * 0.2;
-      return `### 50/30/20 Budget Framework for ${namePrefix}${formatCurrency(
-        monthIncome,
-        currencySymbol
-      )}
-1. **Essential Needs (50% max):** ${formatCurrency(
-        needs,
-        currencySymbol
-      )} — Rent, groceries, healthcare, utilities.
-2. **Discretionary Wants (30% max):** ${formatCurrency(
-        wants,
-        currencySymbol
-      )} — Dining out, entertainment, shopping, hobbies.
-3. **Wealth Building & Savings (20% min):** ${formatCurrency(
-        savings,
-        currencySymbol
-      )} — Emergency fund, investments, debt prepayment.`;
-    }
-
-    return `Based on your records, ${namePrefix}your net balance in ${getMonthLabel(
-      selectedMonth
-    )} is ${formatCurrency(
-      monthNet,
-      currencySymbol
-    )} with a savings rate of ${savingsRate.toFixed(1)}%.
-You have ${goals.length} active savings goals and ${recurring.length} recurring rules set up.`;
-  };
-
-  const handleSendMessage = async (textToSend: string) => {
-    if (!textToSend.trim() || loading) return;
-
-    const userMsg: Message = {
-      id: `user_${Date.now()}`,
-      sender: 'user',
-      text: textToSend,
-      timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
-    };
-
-    setMessages((prev) => [...prev, userMsg]);
+  const handleSend = (text: string) => {
+    if (!text.trim() || isLoading) return;
+    sendMessage(text, financialSnapshot, userName);
     setInput('');
-    setLoading(true);
-
-    try {
-      const res = await fetch('/api/ai/advisor', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          prompt: textToSend,
-          context: financialSnapshot,
-          userName: userName || undefined,
-        }),
-      });
-
-      if (!res.ok) {
-        throw new Error(`Server returned ${res.status}`);
-      }
-
-      const data = await res.json();
-      const botMsg: Message = {
-        id: `bot_${Date.now()}`,
-        sender: 'assistant',
-        text: data.reply || generateRuleBasedFallback(textToSend),
-        timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
-      };
-      setMessages((prev) => [...prev, botMsg]);
-    } catch {
-      // Graceful instant fallback
-      const fallbackReply = generateRuleBasedFallback(textToSend);
-      const botMsg: Message = {
-        id: `bot_${Date.now()}`,
-        sender: 'assistant',
-        text: `${fallbackReply}\n\n*(Note: Instant calculation from your local financial records)*`,
-        timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
-      };
-      setMessages((prev) => [...prev, botMsg]);
-    } finally {
-      setLoading(false);
-    }
   };
 
   return (
     <div className="space-y-6">
       {/* Hero Header */}
-      <div className="rounded-3xl border border-white/90 bg-white p-6 shadow-xs">
+      <div className="rounded-3xl border border-white/90 bg-white p-5 sm:p-6 shadow-xs">
         <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
           <div>
             <div className="text-[10px] font-bold tracking-[0.16em] uppercase text-[#7867B5]">
@@ -362,7 +181,7 @@ You have ${goals.length} active savings goals and ${recurring.length} recurring 
               AI Financial Copilot
             </h2>
             <p className="text-xs text-[#7A7285]">
-              Personalized financial analysis grounded in your actual numbers, category trends, budgets, and goals.
+              Personalized guidance grounded in your actual ledger for {getMonthLabel(selectedMonth)}.
             </p>
           </div>
 
@@ -380,7 +199,7 @@ You have ${goals.length} active savings goals and ${recurring.length} recurring 
             )}
 
             <button
-              onClick={handleClearChat}
+              onClick={clearChat}
               className="inline-flex items-center gap-1.5 rounded-xl border border-[#D5CBE5] bg-white px-3 py-1.5 text-xs font-semibold text-[#5B4E80] shadow-xs hover:bg-[#F8F5FC] transition-colors"
               title="Start a fresh conversation"
             >
@@ -391,7 +210,7 @@ You have ${goals.length} active savings goals and ${recurring.length} recurring 
         </div>
 
         {/* Suggestion Chips */}
-        <div className="mt-6 pt-4 border-t border-[#F0EBF2]">
+        <div className="mt-5 pt-4 border-t border-[#F0EBF2]">
           <div className="text-[11px] font-semibold text-[#6E6678] mb-2.5">
             Quick analysis inquiries:
           </div>
@@ -399,9 +218,9 @@ You have ${goals.length} active savings goals and ${recurring.length} recurring 
             {PROMPT_SUGGESTIONS.map((s, idx) => (
               <button
                 key={idx}
-                onClick={() => handleSendMessage(s)}
-                disabled={loading}
-                className="rounded-xl border border-[#E2D9E8] bg-[#FAF8FB] px-3 py-1.5 text-xs font-medium text-[#4D4556] hover:bg-white hover:border-[#A99BEA] hover:text-[#7867B5] disabled:opacity-50 transition-all text-left"
+                onClick={() => handleSend(s)}
+                disabled={isLoading}
+                className="rounded-xl border border-[#E2D9E8] bg-[#FAF8FB] px-3 py-1.5 text-xs font-medium text-[#4D4556] hover:bg-white hover:border-[#A99BEA] hover:text-[#7867B5] disabled:opacity-50 transition-all text-left active:scale-[0.98]"
               >
                 {s}
               </button>
@@ -413,7 +232,7 @@ You have ${goals.length} active savings goals and ${recurring.length} recurring 
       {/* Chat Thread */}
       <div className="rounded-3xl border border-white/90 bg-white shadow-xs overflow-hidden flex flex-col h-[520px]">
         {/* Messages scroll pane */}
-        <div className="flex-1 overflow-y-auto p-6 space-y-4">
+        <div className="flex-1 overflow-y-auto p-4 sm:p-6 space-y-4">
           {messages.map((m) => (
             <div
               key={m.id}
@@ -450,8 +269,8 @@ You have ${goals.length} active savings goals and ${recurring.length} recurring 
             </div>
           ))}
 
-          {loading && (
-            <div className="flex items-center gap-3 text-xs text-[#7A7285] mr-auto">
+          {isLoading && (
+            <div className="flex items-center gap-3 text-xs text-[#7A7285] mr-auto animate-in fade-in">
               <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-xl bg-gradient-to-br from-[#A99BEA] to-[#8C7BD0] text-white animate-pulse">
                 <Bot className="h-4 w-4" />
               </div>
@@ -471,11 +290,11 @@ You have ${goals.length} active savings goals and ${recurring.length} recurring 
         </div>
 
         {/* Input Bar */}
-        <div className="border-t border-[#F0EBF2] bg-[#FAF8FB] p-4">
+        <div className="border-t border-[#F0EBF2] bg-[#FAF8FB] p-3 sm:p-4">
           <form
             onSubmit={(e) => {
               e.preventDefault();
-              handleSendMessage(input);
+              handleSend(input);
             }}
             className="flex items-center gap-2"
           >
@@ -489,11 +308,11 @@ You have ${goals.length} active savings goals and ${recurring.length} recurring 
               }
               value={input}
               onChange={(e) => setInput(e.target.value)}
-              className="flex-1 rounded-xl border border-[#E2D9E8] bg-white px-4 py-2.5 text-xs text-[#29272F] outline-none focus:border-[#7867B5] focus:ring-2 focus:ring-[#7867B5]/20 transition-all shadow-inner"
+              className="flex-1 rounded-xl border border-[#E2D9E8] bg-white px-3.5 sm:px-4 py-2.5 text-xs text-[#29272F] outline-none focus:border-[#7867B5] focus:ring-2 focus:ring-[#7867B5]/20 transition-all shadow-inner"
             />
             <button
               type="submit"
-              disabled={loading || !input.trim()}
+              disabled={isLoading || !input.trim()}
               className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-gradient-to-r from-[#A99BEA] to-[#7867B5] text-white shadow-xs disabled:opacity-50 hover:brightness-105 active:scale-95 transition-all"
               title="Send inquiry"
             >

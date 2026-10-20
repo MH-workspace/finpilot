@@ -42,6 +42,7 @@ import { TransactionModal } from './components/TransactionModal';
 import { AuthModal } from './components/AuthModal';
 import { MobileBottomNav } from './components/MobileBottomNav';
 import { useAuth } from './context/AuthContext';
+import { useAIChat } from './context/AIChatContext';
 import {
   subscribeToTransactions,
   subscribeToBudgets,
@@ -122,6 +123,14 @@ export default function App() {
     setToast({ message, type });
     setTimeout(() => setToast(null), 3800);
   };
+
+  const { hasUnreadReply } = useAIChat();
+
+  useEffect(() => {
+    if (hasUnreadReply && activePage !== 'AI Assistant') {
+      showToast('FinPilot AI Copilot has prepared your financial advice. Tap "Ask AI" to view.', 'info');
+    }
+  }, [hasUnreadReply, activePage]);
 
   // Online / Offline tracking
   useEffect(() => {
@@ -786,6 +795,7 @@ export default function App() {
       <MobileBottomNav
         activePage={activePage}
         setActivePage={setActivePage}
+        onOpenMobileSidebar={() => setIsMobileSidebarOpen(true)}
         onOpenAddTransaction={() => {
           setEditingTx(null);
           setIsTxModalOpen(true);

@@ -10,9 +10,15 @@ import {
   Settings,
   ChevronRight,
   Calendar,
+  LogIn,
+  LogOut,
+  Cloud,
+  User,
+  X,
 } from 'lucide-react';
 import { ActivePage } from '../types/finance';
 import { formatCurrency } from '../utils/formatters';
+import { useAuth } from '../context/AuthContext';
 
 interface SidebarProps {
   activePage: ActivePage;
@@ -50,6 +56,14 @@ export const Sidebar: React.FC<SidebarProps> = ({
   isOpenMobile,
   setIsOpenMobile,
 }) => {
+  const { user, signOut, setIsAuthModalOpen, setAuthModalMode } = useAuth();
+
+  const handleOpenSignIn = () => {
+    setAuthModalMode('signin');
+    setIsAuthModalOpen(true);
+    setIsOpenMobile(false);
+  };
+
   return (
     <>
       {/* Mobile backdrop */}
@@ -66,10 +80,21 @@ export const Sidebar: React.FC<SidebarProps> = ({
         }`}
       >
         {/* Brand header */}
-        <div className="flex flex-col p-6 pb-4">
-          <div className="text-[10px] font-bold tracking-[0.16em] uppercase text-[#7867B5]">
-            YOUR MONEY, MORE CLEARLY
+        <div className="flex flex-col p-6 pb-4 relative">
+          <div className="flex items-center justify-between">
+            <div className="text-[10px] font-bold tracking-[0.16em] uppercase text-[#7867B5]">
+              YOUR MONEY, MORE CLEARLY
+            </div>
+            {/* Close button for mobile */}
+            <button
+              onClick={() => setIsOpenMobile(false)}
+              className="md:hidden flex h-7 w-7 items-center justify-center rounded-lg bg-white/70 text-[#554D60] hover:bg-white"
+              aria-label="Close menu"
+            >
+              <X className="h-4 w-4" />
+            </button>
           </div>
+
           <button
             onClick={() => {
               setActivePage('Dashboard');
@@ -87,6 +112,66 @@ export const Sidebar: React.FC<SidebarProps> = ({
           <p className="mt-1 text-xs text-[#7A7285]">
             Thoughtful tools. Clearer financial decisions.
           </p>
+        </div>
+
+        {/* User Account Section (Vital for Mobile Discovery) */}
+        <div className="px-4 pb-2">
+          {user ? (
+            <div className="rounded-2xl border border-white/80 bg-white/70 p-3 shadow-xs">
+              <div className="flex items-center gap-2.5">
+                {user.photoURL ? (
+                  <img
+                    src={user.photoURL}
+                    alt={user.displayName || 'User'}
+                    className="h-8 w-8 rounded-xl object-cover shrink-0"
+                    referrerPolicy="no-referrer"
+                  />
+                ) : (
+                  <div className="flex h-8 w-8 items-center justify-center rounded-xl bg-[#EDE7F5] text-[#7867B5] font-bold text-xs shrink-0">
+                    {user.displayName?.charAt(0) || user.email?.charAt(0) || 'U'}
+                  </div>
+                )}
+                <div className="min-w-0 flex-1">
+                  <div className="text-xs font-semibold text-[#29272F] truncate">
+                    {user.displayName || 'FinPilot Member'}
+                  </div>
+                  <div className="text-[10px] text-[#7A7285] truncate">{user.email}</div>
+                </div>
+              </div>
+              <div className="mt-2.5 flex items-center justify-between pt-2 border-t border-[#EAE3F0] text-[11px]">
+                <div className="flex items-center gap-1.5 text-[#3E7459] font-medium text-[10px]">
+                  <Cloud className="h-3 w-3" />
+                  <span>Cloud Active</span>
+                </div>
+                <button
+                  onClick={() => signOut()}
+                  className="flex items-center gap-1 font-medium text-rose-700 hover:underline text-[11px]"
+                >
+                  <LogOut className="h-3 w-3" />
+                  <span>Sign Out</span>
+                </button>
+              </div>
+            </div>
+          ) : (
+            <div className="rounded-2xl border border-[#D8CEE8] bg-gradient-to-br from-[#FAF8FC] to-[#F1EAF8] p-3 shadow-xs">
+              <div className="flex items-center gap-2">
+                <span className="flex h-6 w-6 items-center justify-center rounded-lg bg-[#EAE2F3] text-[#7867B5]">
+                  <User className="h-3.5 w-3.5" />
+                </span>
+                <span className="text-xs font-bold text-[#29272F]">Personal Cloud Account</span>
+              </div>
+              <p className="mt-1 text-[11px] text-[#746C80]">
+                Sign in to save your financial records to the cloud and sync across devices.
+              </p>
+              <button
+                onClick={handleOpenSignIn}
+                className="mt-2.5 flex w-full items-center justify-center gap-1.5 rounded-xl bg-gradient-to-r from-[#7867B5] to-[#6756A4] py-2 text-xs font-semibold text-white shadow-xs hover:brightness-105 active:scale-95 transition-all"
+              >
+                <LogIn className="h-3.5 w-3.5" />
+                <span>Sign In or Register</span>
+              </button>
+            </div>
+          )}
         </div>
 
         {/* Reporting Period Selector */}
@@ -119,7 +204,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
         </div>
 
         {/* Navigation list */}
-        <div className="mt-3 flex-1 overflow-y-auto px-4 py-2">
+        <div className="mt-1 flex-1 overflow-y-auto px-4 py-2">
           <div className="mb-2 px-2 text-[10px] font-bold tracking-[0.14em] uppercase text-[#7A7285]">
             Workspace
           </div>

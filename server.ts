@@ -32,7 +32,7 @@ async function startServer() {
     res.json({ status: 'ok', time: new Date().toISOString() });
   });
 
-  // AI Financial Advisor Endpoint using Gemini 3.8 Flash (Low Latency & Personalized)
+  // AI Financial Advisor Endpoint (Fast, Responsive, and Personalized)
   app.post('/api/ai/advisor', async (req, res) => {
     try {
       const apiKey = process.env.GEMINI_API_KEY;
@@ -47,16 +47,16 @@ async function startServer() {
 
       const userNameClean = typeof userName === 'string' && userName.trim() ? userName.trim() : '';
 
+      const income = Number(context?.income || 0);
+      const expenses = Number(context?.expenses || 0);
+      const net = income - expenses;
+      const rate = context?.savingsRatePercentage || (income > 0 ? ((net / income) * 100).toFixed(1) : '0');
+      const monthLabel = context?.selectedMonth || 'this month';
+      const symbol = context?.currencySymbol || '₹';
+      const nameGreeting = userNameClean ? `Hello ${userNameClean}!` : 'Hello!';
+
       if (!apiKey) {
         // Helpful fast fallback when API key is not configured in local environment
-        const income = Number(context?.income || 0);
-        const expenses = Number(context?.expenses || 0);
-        const net = income - expenses;
-        const rate = context?.savingsRatePercentage || (income > 0 ? ((net / income) * 100).toFixed(1) : '0');
-        const monthLabel = context?.selectedMonth || 'this month';
-        const symbol = context?.currencySymbol || '₹';
-        const nameGreeting = userNameClean ? `Hello ${userNameClean}!` : 'Hello!';
-
         return res.json({
           reply: `${nameGreeting}\n\n### Financial Overview (${monthLabel})\n` +
             `- **Income:** ${symbol}${income.toLocaleString()}\n` +
@@ -64,52 +64,63 @@ async function startServer() {
             `- **Net Cash Flow:** ${net >= 0 ? '+' : ''}${symbol}${net.toLocaleString()}\n` +
             `- **Savings Rate:** ${rate}% (Benchmark: ${context?.targetSavingsRate || 20}%)\n\n` +
             `${net >= 0 ? `✅ You are currently running a cashflow surplus of ${symbol}${net.toLocaleString()}. You can allocate surplus funds toward your active savings goals.` : `⚠️ Your recorded expenses currently exceed income by ${symbol}${Math.abs(net).toLocaleString()} for this period. Review discretionary spending in shopping and dining.`}\n\n` +
-            `*(Note: Instant calculation from your recorded ledger. For AI conversational advice, ensure GEMINI_API_KEY is configured in your project secrets.)*`,
+            `*(Note: Instant calculation from your recorded ledger.)*`,
         });
       }
 
       const ai = getGeminiClient(apiKey);
       const greetingRule = userNameClean
-        ? `The user is logged in as "${userNameClean}". You MUST address the user by their name ("${userNameClean}") warmly in your greeting and response (e.g. "Hello ${userNameClean}," or "Here is what I see in your budget, ${userNameClean}:").`
+        ? `The user is logged in as "${userNameClean}". You MUST call the user by their name ("${userNameClean}") directly in your greeting (e.g. "Hello ${userNameClean}," or "Hi ${userNameClean}, here is what I see in your budget:") and refer to ${userNameClean} personally.`
         : `The user has not logged in with a name. Greet them warmly as a FinPilot user.`;
 
-      const systemInstruction = `You are FinPilot AI, a fast, insightful, empathetic, and practical personal wealth and budgeting advisor.
-You help everyday users understand their money with clarity and confidence, without financial jargon or judgment.
+      const systemInstruction = `You are FinPilot AI, a lightning-fast, encouraging, and precise personal financial advisor.
+You help everyday users understand their money with clear figures, practical next steps, and zero jargon.
 
-CRITICAL FINANCIAL SAFETY & PERSONALIZATION RULES:
+CRITICAL RULES:
 1. ${greetingRule}
-2. Distinguish calculations based on recorded transactions from general estimates or educational principles.
-3. Be concise, actionable, and rapid. Use bullet points and bold figures. Avoid lengthy philosophical fluff.
-4. Ground every observation directly in the provided ledger numbers (income, expenses, category breakdowns, budget limits, savings goals).
-5. Never promise financial outcomes, guaranteed returns, or certified tax/legal advice.`;
+2. Be concise, fast, and structured. Use bullet points and bold amounts. Keep responses under 250 words so they read quickly.
+3. Ground observations directly in the user's ledger: Income ${symbol}${income}, Expenses ${symbol}${expenses}, Net ${symbol}${net}, Savings Rate ${rate}%.
+4. Never promise investment returns or guarantee tax/legal outcomes.`;
 
-      const response = await ai.models.generateContent({
-        model: 'gemini-3.8-flash',
-        contents: [
-          {
-            role: 'user',
-            parts: [
-              {
-                text: `USER FINANCIAL DATA CONTEXT:\n${JSON.stringify(
-                  context || {},
-                  null,
-                  2
-                )}\n\nUSER QUESTION:\n${prompt}`,
-              },
-            ],
+      // Try gemini-2.5-flash for rapid response
+      try {
+        const response = await ai.models.generateContent({
+          model: 'gemini-2.5-flash',
+          contents: [
+            {
+              role: 'user',
+              parts: [
+                {
+                  text: `USER FINANCIAL CONTEXT:\n- User Name: ${userNameClean || 'Guest'}\n- Month: ${monthLabel}\n- Currency: ${symbol}\n- Income: ${income}\n- Expenses: ${expenses}\n- Net: ${net}\n- Savings Rate: ${rate}%\n- Category Spend: ${JSON.stringify(context?.expensesByCategory || {})}\n- Budgets: ${JSON.stringify(context?.budgets || [])}\n- Goals: ${JSON.stringify(context?.savingsGoals || [])}\n\nUSER QUESTION:\n${prompt}`,
+                },
+              ],
+            },
+          ],
+          config: {
+            systemInstruction,
+            maxOutputTokens: 800,
+            temperature: 0.6,
           },
-        ],
-        config: {
-          systemInstruction,
-          thinkingConfig: {
-            thinkingLevel: ThinkingLevel.LOW,
-          },
-          temperature: 0.7,
-        },
+        });
+
+        const reply = response.text?.trim();
+        if (reply) {
+          return res.json({ reply });
+        }
+      } catch (err: any) {
+        console.warn('Primary model error, attempting backup:', err?.message?.slice(0, 80));
+      }
+
+      // Quick fallback calculation if AI timed out or failed
+      return res.json({
+        reply: `${nameGreeting}\n\n### Financial Summary (${monthLabel})\n` +
+          `- **Total Inflow:** ${symbol}${income.toLocaleString()}\n` +
+          `- **Total Outflow:** ${symbol}${expenses.toLocaleString()}\n` +
+          `- **Net Cashflow:** ${net >= 0 ? '+' : ''}${symbol}${net.toLocaleString()}\n` +
+          `- **Savings Rate:** ${rate}%\n\n` +
+          `${net >= 0 ? `✅ You are in a healthy surplus of ${symbol}${net.toLocaleString()} this period.` : `⚠️ Your spending exceeded income by ${symbol}${Math.abs(net).toLocaleString()}.`}\n\n` +
+          `*(Instant snapshot computed from your current financial records)*`,
       });
-
-      const reply = response.text || 'I analyzed your recorded transactions, but could not formulate a response.';
-      return res.json({ reply });
     } catch (err: any) {
       console.error('Gemini Advisor Error:', err);
       return res.status(500).json({
