@@ -83,10 +83,10 @@ CORE RULES:
 4. If income or expenses are 0 for the selected month, note that contextually and guide the user to log transactions or evaluate their baseline recurring setup.
 5. Never guarantee tax or legal outcomes or promise investment returns.`;
 
-      // Run Gemini 2.5 Flash with an 8-second timeout guard
+      // Run Gemini 2.5 Flash with zero thinking budget for instant low-latency responses
       try {
         const timeoutPromise = new Promise<never>((_, reject) =>
-          setTimeout(() => reject(new Error('AI response timeout')), 8000)
+          setTimeout(() => reject(new Error('AI response timeout')), 25000)
         );
 
         const geminiPromise = ai.models.generateContent({
@@ -122,6 +122,7 @@ CORE RULES:
             systemInstruction,
             maxOutputTokens: 2048,
             temperature: 0.6,
+            thinkingConfig: { thinkingBudget: 0 },
           },
         });
 
@@ -156,9 +157,9 @@ CORE RULES:
         return res.json({ category: 'Other', suggestedBudget: 0 });
       }
 
-      const ai = new GoogleGenAI({ apiKey });
+      const ai = getGeminiClient(apiKey);
       const response = await ai.models.generateContent({
-        model: 'gemini-3.8-flash',
+        model: 'gemini-2.5-flash',
         contents: [
           {
             role: 'user',
@@ -174,6 +175,7 @@ Return ONLY a valid JSON object in this exact format:
         ],
         config: {
           responseMimeType: 'application/json',
+          thinkingConfig: { thinkingBudget: 0 },
         },
       });
 

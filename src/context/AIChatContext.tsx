@@ -160,7 +160,7 @@ What would you like to review today?`,
 
       try {
         const controller = new AbortController();
-        const timeoutId = setTimeout(() => controller.abort(), 16000);
+        const timeoutId = setTimeout(() => controller.abort(), 30000);
 
         const res = await fetch('/api/ai/advisor', {
           method: 'POST',
