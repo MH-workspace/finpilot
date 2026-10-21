@@ -5,6 +5,8 @@ import path from 'path';
 import { fileURLToPath } from 'url';
 import { GoogleGenAI, ThinkingLevel } from '@google/genai';
 
+import { generateAdvancedFinancialAdvice } from './src/utils/financialIntelligence';
+
 dotenv.config();
 
 const __filename = fileURLToPath(import.meta.url);
@@ -32,7 +34,7 @@ async function startServer() {
     res.json({ status: 'ok', time: new Date().toISOString() });
   });
 
-  // AI Financial Advisor Endpoint (Fast, Responsive, and Personalized)
+  // AI Financial Advisor Endpoint (Fast, Responsive, and Specialized)
   app.post('/api/ai/advisor', async (req, res) => {
     try {
       const apiKey = process.env.GEMINI_API_KEY;
@@ -53,74 +55,88 @@ async function startServer() {
       const rate = context?.savingsRatePercentage || (income > 0 ? ((net / income) * 100).toFixed(1) : '0');
       const monthLabel = context?.selectedMonth || 'this month';
       const symbol = context?.currencySymbol || '₹';
-      const nameGreeting = userNameClean ? `Hello ${userNameClean}!` : 'Hello!';
 
+      // If no API key is configured, instantly run specialized FinPilot intelligence engine
       if (!apiKey) {
-        // Helpful fast fallback when API key is not configured in local environment
-        return res.json({
-          reply: `${nameGreeting}\n\n### Financial Overview (${monthLabel})\n` +
-            `- **Income:** ${symbol}${income.toLocaleString()}\n` +
-            `- **Expenses:** ${symbol}${expenses.toLocaleString()}\n` +
-            `- **Net Cash Flow:** ${net >= 0 ? '+' : ''}${symbol}${net.toLocaleString()}\n` +
-            `- **Savings Rate:** ${rate}% (Benchmark: ${context?.targetSavingsRate || 20}%)\n\n` +
-            `${net >= 0 ? `✅ You are currently running a cashflow surplus of ${symbol}${net.toLocaleString()}. You can allocate surplus funds toward your active savings goals.` : `⚠️ Your recorded expenses currently exceed income by ${symbol}${Math.abs(net).toLocaleString()} for this period. Review discretionary spending in shopping and dining.`}\n\n` +
-            `*(Note: Instant calculation from your recorded ledger.)*`,
-        });
+        const fallbackReply = generateAdvancedFinancialAdvice(context || {}, prompt, userNameClean);
+        return res.json({ reply: fallbackReply });
       }
 
       const ai = getGeminiClient(apiKey);
-      const greetingRule = userNameClean
-        ? `The user is logged in as "${userNameClean}". You MUST call the user by their name ("${userNameClean}") directly in your greeting (e.g. "Hello ${userNameClean}," or "Hi ${userNameClean}, here is what I see in your budget:") and refer to ${userNameClean} personally.`
-        : `The user has not logged in with a name. Greet them warmly as a FinPilot user.`;
+      const personalizationRule = userNameClean
+        ? `The user is logged in as "${userNameClean}". Integrate their name naturally in your response (e.g. "${userNameClean}, looking at your October finances..." or "Here is an audit of your budgets, ${userNameClean}:"). Do NOT start every reply with a robotic "Hello ${userNameClean}!". Speak to them as their dedicated personal financial copilot.`
+        : `The user has not logged in with a name. Address them conversationally and directly as their FinPilot AI Copilot. Do NOT use stiff generic openers like "Hello FinPilot user!". Jump straight into actionable insights.`;
 
-      const systemInstruction = `You are FinPilot AI, a lightning-fast, encouraging, and precise personal financial advisor.
-You help everyday users understand their money with clear figures, practical next steps, and zero jargon.
+      const systemInstruction = `You are FinPilot AI Copilot, an elite, lightning-fast personal financial advisor embedded inside the FinPilot personal finance app.
+You provide deep, hyper-actionable financial guidance based on the user's recorded ledger, budgets, goals, and recurring rules.
 
-CRITICAL RULES:
-1. ${greetingRule}
-2. Be concise, fast, and structured. Use bullet points and bold amounts. Keep responses under 250 words so they read quickly.
-3. Ground observations directly in the user's ledger: Income ${symbol}${income}, Expenses ${symbol}${expenses}, Net ${symbol}${net}, Savings Rate ${rate}%.
-4. Never promise investment returns or guarantee tax/legal outcomes.`;
+CORE RULES:
+1. ${personalizationRule}
+2. Be concise, fast, and highly structured (under 280 words). Use clean Markdown bullet points, bold numbers with ${symbol}, and comparison tables where helpful.
+3. Specialize in FinPilot features:
+   - Cashflow & Net Margin: Income ${symbol}${income.toLocaleString()}, Expenses ${symbol}${expenses.toLocaleString()}, Net ${symbol}${net.toLocaleString()} (${net >= 0 ? 'Surplus' : 'Deficit'}).
+   - Savings Rate vs Target: Current rate ${rate}% vs target ${context?.targetSavingsRate || 20}%.
+   - 50/30/20 Framework: Categorize into Needs (Bills, Food, Transport, Health), Wants (Shopping, Entertainment), Savings & Goals.
+   - Budget Guardrails: Identify any categories exceeding limits or nearing 80% capacity.
+   - Goal Acceleration: Calculate exact monthly contributions to hit savings milestones.
+   - Recurring Fixed Costs: Audit monthly subscriptions and utilities.
+4. If income or expenses are 0 for the selected month, note that contextually and guide the user to log transactions or evaluate their baseline recurring setup.
+5. Never guarantee tax or legal outcomes or promise investment returns.`;
 
-      // Try gemini-2.5-flash for rapid response
+      // Run Gemini 2.5 Flash with an 8-second timeout guard
       try {
-        const response = await ai.models.generateContent({
+        const timeoutPromise = new Promise<never>((_, reject) =>
+          setTimeout(() => reject(new Error('AI response timeout')), 8000)
+        );
+
+        const geminiPromise = ai.models.generateContent({
           model: 'gemini-2.5-flash',
           contents: [
             {
               role: 'user',
               parts: [
                 {
-                  text: `USER FINANCIAL CONTEXT:\n- User Name: ${userNameClean || 'Guest'}\n- Month: ${monthLabel}\n- Currency: ${symbol}\n- Income: ${income}\n- Expenses: ${expenses}\n- Net: ${net}\n- Savings Rate: ${rate}%\n- Category Spend: ${JSON.stringify(context?.expensesByCategory || {})}\n- Budgets: ${JSON.stringify(context?.budgets || [])}\n- Goals: ${JSON.stringify(context?.savingsGoals || [])}\n\nUSER QUESTION:\n${prompt}`,
+                  text: `USER FINANCIAL LEDGER SNAPSHOT:\n` +
+                    `- User Name: ${userNameClean || 'None'}\n` +
+                    `- Reporting Month: ${monthLabel}\n` +
+                    `- Currency: ${symbol}\n` +
+                    `- Total Recorded Inflow: ${symbol}${income.toLocaleString()}\n` +
+                    `- Total Recorded Outflow: ${symbol}${expenses.toLocaleString()}\n` +
+                    `- Net Cash Flow: ${net >= 0 ? '+' : ''}${symbol}${net.toLocaleString()}\n` +
+                    `- Savings Rate: ${rate}%\n` +
+                    `- Needs Outflow: ${symbol}${context?.needsTotal || 0}\n` +
+                    `- Wants Outflow: ${symbol}${context?.wantsTotal || 0}\n` +
+                    `- Top Expense Category: ${JSON.stringify(context?.topExpenseCategory || 'None')}\n` +
+                    `- Expense Categories Breakdown: ${JSON.stringify(context?.expensesByCategory || {})}\n` +
+                    `- Budgets Status: ${JSON.stringify(context?.budgets || [])}\n` +
+                    `- Active Savings Goals: ${JSON.stringify(context?.savingsGoals || [])}\n` +
+                    `- Recurring Rules: ${JSON.stringify(context?.recurringRules || [])}\n` +
+                    `- Total Database Transactions: ${context?.totalTransactionsCount || 0}\n` +
+                    `- Recent Transactions: ${JSON.stringify(context?.recentTransactions || [])}\n\n` +
+                    `USER INQUIRY:\n${prompt}`,
                 },
               ],
             },
           ],
           config: {
             systemInstruction,
-            maxOutputTokens: 800,
+            maxOutputTokens: 2048,
             temperature: 0.6,
           },
         });
 
+        const response: any = await Promise.race([geminiPromise, timeoutPromise]);
         const reply = response.text?.trim();
-        if (reply) {
+        if (reply && reply.length > 50) {
           return res.json({ reply });
         }
       } catch (err: any) {
-        console.warn('Primary model error, attempting backup:', err?.message?.slice(0, 80));
+        console.warn('Gemini advisor call timed out or failed, using specialized financial intelligence engine:', err?.message?.slice(0, 100));
       }
 
-      // Quick fallback calculation if AI timed out or failed
-      return res.json({
-        reply: `${nameGreeting}\n\n### Financial Summary (${monthLabel})\n` +
-          `- **Total Inflow:** ${symbol}${income.toLocaleString()}\n` +
-          `- **Total Outflow:** ${symbol}${expenses.toLocaleString()}\n` +
-          `- **Net Cashflow:** ${net >= 0 ? '+' : ''}${symbol}${net.toLocaleString()}\n` +
-          `- **Savings Rate:** ${rate}%\n\n` +
-          `${net >= 0 ? `✅ You are in a healthy surplus of ${symbol}${net.toLocaleString()} this period.` : `⚠️ Your spending exceeded income by ${symbol}${Math.abs(net).toLocaleString()}.`}\n\n` +
-          `*(Instant snapshot computed from your current financial records)*`,
-      });
+      // High-precision specialized financial intelligence fallback
+      const fallbackReply = generateAdvancedFinancialAdvice(context || {}, prompt, userNameClean);
+      return res.json({ reply: fallbackReply });
     } catch (err: any) {
       console.error('Gemini Advisor Error:', err);
       return res.status(500).json({

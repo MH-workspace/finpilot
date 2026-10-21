@@ -1,5 +1,6 @@
 import React, { createContext, useContext, useState, useEffect, useCallback, useRef } from 'react';
 import { useAuth } from './AuthContext';
+import { generateAdvancedFinancialAdvice } from '../utils/financialIntelligence';
 
 export interface AIMessage {
   id: string;
@@ -23,14 +24,25 @@ const AIChatContext = createContext<AIChatContextType | undefined>(undefined);
 
 export const AIChatProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
   const { user } = useAuth();
-  const storageKey = `finpilot_ai_copilot_v4_${user ? user.uid : 'guest'}`;
+  const storageKey = `finpilot_ai_copilot_v5_${user ? user.uid : 'guest'}`;
 
-  const createInitialWelcome = (name: string, monthLabel = 'this month'): AIMessage => {
-    const greeting = name ? `Hello ${name}!` : 'Hello!';
+  const createInitialWelcome = (name: string, monthLabel = 'this month', txCount = 0): AIMessage => {
+    const greeting = name ? `Welcome back, ${name}!` : 'Welcome to FinPilot AI Copilot!';
     return {
       id: 'welcome',
       sender: 'assistant',
-      text: `${greeting} I am your FinPilot Financial Copilot powered by Gemini.\n\nI am actively connected with your financial records for **${monthLabel}**. You can ask me to summarize cashflow, find spending leaks, create a 50/30/20 budget recommendation, audit recurring bills, or evaluate your savings goals.\n\nHow can I help you optimize your money today?`,
+      text: `${greeting} I am your specialized Financial Intelligence Copilot.
+
+I am actively connected with your financial records for **${monthLabel}** (${txCount > 0 ? `${txCount} transactions recorded` : 'ready for new entries'}). 
+
+You can ask me to:
+- 📊 **Analyze Cashflow & Spending:** Inspect inflow, outflow, and net cashflow
+- 🎯 **50/30/20 Budget Blueprint:** Balance your Needs, Wants, and Savings targets
+- ⚠️ **Audit Overspending:** Check budget category limits and leakages
+- 🔄 **Subscription & Bill Check:** Audit recurring monthly fixed costs
+- 💡 **Accelerate Goals:** Calculate exact monthly contributions to hit targets on time
+
+What would you like to review today?`,
       timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
     };
   };
@@ -60,7 +72,7 @@ export const AIChatProvider: React.FC<{ children: React.ReactNode }> = ({ childr
   // Reload history when user changes (e.g. login / logout)
   useEffect(() => {
     try {
-      const key = `finpilot_ai_copilot_v4_${user ? user.uid : 'guest'}`;
+      const key = `finpilot_ai_copilot_v5_${user ? user.uid : 'guest'}`;
       const saved = localStorage.getItem(key);
       if (saved) {
         const parsed = JSON.parse(saved);
@@ -80,7 +92,7 @@ export const AIChatProvider: React.FC<{ children: React.ReactNode }> = ({ childr
   // Save messages whenever they change
   useEffect(() => {
     try {
-      const key = `finpilot_ai_copilot_v4_${user ? user.uid : 'guest'}`;
+      const key = `finpilot_ai_copilot_v5_${user ? user.uid : 'guest'}`;
       localStorage.setItem(key, JSON.stringify(messages));
     } catch {
       // ignore quota
@@ -90,12 +102,23 @@ export const AIChatProvider: React.FC<{ children: React.ReactNode }> = ({ childr
   const setWelcomeIfNeeded = useCallback((name: string, monthLabel: string, txCount: number) => {
     setMessages((prev) => {
       if (prev.length === 1 && prev[0].id === 'welcome') {
-        const greeting = name ? `Hello ${name}!` : 'Hello!';
+        const greeting = name ? `Welcome back, ${name}!` : 'Welcome to FinPilot AI Copilot!';
         return [
           {
             id: 'welcome',
             sender: 'assistant',
-            text: `${greeting} I am your FinPilot Financial Copilot powered by Gemini.\n\nI am actively connected with your financial records for **${monthLabel}** (${txCount} transactions recorded). Ask me anything about your spending, or select a quick topic below.`,
+            text: `${greeting} I am your specialized Financial Intelligence Copilot.
+
+I am actively connected with your financial records for **${monthLabel}** (${txCount > 0 ? `${txCount} transactions recorded` : 'ready for new entries'}).
+
+You can ask me to:
+- 📊 **Analyze Cashflow & Spending:** Inspect inflow, outflow, and net cashflow
+- 🎯 **50/30/20 Budget Blueprint:** Balance your Needs, Wants, and Savings targets
+- ⚠️ **Audit Overspending:** Check budget category limits and leakages
+- 🔄 **Subscription & Bill Check:** Audit recurring monthly fixed costs
+- 💡 **Accelerate Goals:** Calculate exact monthly contributions to hit targets on time
+
+What would you like to review today?`,
             timestamp: prev[0].timestamp,
           },
         ];
@@ -109,7 +132,7 @@ export const AIChatProvider: React.FC<{ children: React.ReactNode }> = ({ childr
     const initial = [createInitialWelcome(displayName)];
     setMessages(initial);
     try {
-      const key = `finpilot_ai_copilot_v4_${userRef.current ? userRef.current.uid : 'guest'}`;
+      const key = `finpilot_ai_copilot_v5_${userRef.current ? userRef.current.uid : 'guest'}`;
       localStorage.setItem(key, JSON.stringify(initial));
     } catch {}
     setHasUnreadReply(false);
@@ -137,7 +160,7 @@ export const AIChatProvider: React.FC<{ children: React.ReactNode }> = ({ childr
 
       try {
         const controller = new AbortController();
-        const timeoutId = setTimeout(() => controller.abort(), 12000);
+        const timeoutId = setTimeout(() => controller.abort(), 16000);
 
         const res = await fetch('/api/ai/advisor', {
           method: 'POST',
@@ -159,16 +182,8 @@ export const AIChatProvider: React.FC<{ children: React.ReactNode }> = ({ childr
         }
 
         if (!replyText) {
-          // Instant fallback calculation
-          const greeting = userName ? `Hello ${userName}!` : 'Hello!';
-          const net = Number(financialSnapshot?.net || 0);
-          const symbol = financialSnapshot?.currencySymbol || '₹';
-          replyText = `${greeting}\n\nHere is your financial status for **${financialSnapshot?.selectedMonth || 'this month'}**:\n` +
-            `- **Income:** ${symbol}${Number(financialSnapshot?.income || 0).toLocaleString()}\n` +
-            `- **Expenses:** ${symbol}${Number(financialSnapshot?.expenses || 0).toLocaleString()}\n` +
-            `- **Net Cash Flow:** ${net >= 0 ? '+' : ''}${symbol}${net.toLocaleString()}\n` +
-            `- **Savings Rate:** ${financialSnapshot?.savingsRatePercentage || '0'}%\n\n` +
-            `${net >= 0 ? `✅ You are running a surplus of ${symbol}${net.toLocaleString()}.` : `⚠️ Expenses exceed income by ${symbol}${Math.abs(net).toLocaleString()}.`}`;
+          // Instant deep financial reasoning fallback
+          replyText = generateAdvancedFinancialAdvice(financialSnapshot, trimmed, userName);
         }
 
         const botMsg: AIMessage = {
@@ -181,18 +196,12 @@ export const AIChatProvider: React.FC<{ children: React.ReactNode }> = ({ childr
         setMessages((prev) => [...prev, botMsg]);
         setHasUnreadReply(true);
       } catch (err: any) {
-        const greeting = userName ? `Hello ${userName}!` : 'Hello!';
-        const net = Number(financialSnapshot?.net || 0);
-        const symbol = financialSnapshot?.currencySymbol || '₹';
+        // High quality fallback on timeout or offline
+        const replyText = generateAdvancedFinancialAdvice(financialSnapshot, trimmed, userName);
         const fallbackMsg: AIMessage = {
           id: `bot_${Date.now()}`,
           sender: 'assistant',
-          text: `${greeting}\n\nHere is an instant breakdown based on your records for **${financialSnapshot?.selectedMonth || 'this month'}**:\n` +
-            `- **Income:** ${symbol}${Number(financialSnapshot?.income || 0).toLocaleString()}\n` +
-            `- **Expenses:** ${symbol}${Number(financialSnapshot?.expenses || 0).toLocaleString()}\n` +
-            `- **Net Cash Flow:** ${net >= 0 ? '+' : ''}${symbol}${net.toLocaleString()}\n` +
-            `- **Savings Rate:** ${financialSnapshot?.savingsRatePercentage || '0'}%\n\n` +
-            `*(Instant calculations from your local ledger)*`,
+          text: replyText,
           timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
         };
         setMessages((prev) => [...prev, fallbackMsg]);

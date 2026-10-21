@@ -5,13 +5,21 @@ import {
   Bot,
   User,
   RefreshCw,
-  Clock,
-  CheckCircle2,
-  AlertCircle,
+  TrendingUp,
+  TrendingDown,
+  PieChart,
+  Target,
+  Repeat,
+  ShieldCheck,
+  AlertTriangle,
+  Copy,
+  Check,
+  ArrowRight,
 } from 'lucide-react';
 import { Transaction, Budget, SavingsGoal, RecurringRule } from '../types/finance';
 import { formatCurrency, getMonthLabel } from '../utils/formatters';
 import { useAIChat } from '../context/AIChatContext';
+import { buildDetailedFinancialSnapshot } from '../utils/financialIntelligence';
 
 interface AIAdvisorViewProps {
   transactions: Transaction[];
@@ -24,12 +32,37 @@ interface AIAdvisorViewProps {
   userName?: string;
 }
 
-const PROMPT_SUGGESTIONS = [
-  'Summarize this month’s cashflow and spending',
-  'Where am I overspending and how can I fix it?',
-  'Calculate a 50/30/20 budget recommendation for my income',
-  'Audit my recurring subscriptions and fixed bills',
-  'How can I reach my savings goals faster?',
+const CATEGORIZED_PROMPTS = [
+  {
+    category: 'Cashflow',
+    icon: TrendingUp,
+    text: "Summarize this month's cashflow and spending",
+  },
+  {
+    category: '50/30/20',
+    icon: PieChart,
+    text: 'Calculate a 50/30/20 budget recommendation for my income',
+  },
+  {
+    category: 'Budget Audit',
+    icon: AlertTriangle,
+    text: 'Where am I overspending and how can I fix it?',
+  },
+  {
+    category: 'Subscriptions',
+    icon: Repeat,
+    text: 'Audit my recurring subscriptions and fixed bills',
+  },
+  {
+    category: 'Goals',
+    icon: Target,
+    text: 'How can I reach my savings goals faster?',
+  },
+  {
+    category: 'Wealth Habits',
+    icon: ShieldCheck,
+    text: 'What are 3 practical steps to increase my savings rate this month?',
+  },
 ];
 
 export const AIAdvisorView: React.FC<AIAdvisorViewProps> = ({
@@ -52,6 +85,7 @@ export const AIAdvisorView: React.FC<AIAdvisorViewProps> = ({
   } = useAIChat();
 
   const [input, setInput] = useState('');
+  const [copiedId, setCopiedId] = useState<string | null>(null);
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLInputElement>(null);
 
@@ -74,92 +108,27 @@ export const AIAdvisorView: React.FC<AIAdvisorViewProps> = ({
     setWelcomeIfNeeded(userName, getMonthLabel(selectedMonth), transactions.length);
   }, [userName, selectedMonth, transactions.length, setWelcomeIfNeeded]);
 
-  // Compile full financial context for Gemini
-  const monthTx = useMemo(
-    () => transactions.filter((tx) => tx.date.startsWith(selectedMonth)),
-    [transactions, selectedMonth]
-  );
-
-  const monthIncome = useMemo(
-    () =>
-      monthTx
-        .filter((tx) => tx.type === 'Income')
-        .reduce((sum, tx) => sum + tx.amount, 0),
-    [monthTx]
-  );
-
-  const monthExpenses = useMemo(
-    () =>
-      monthTx
-        .filter((tx) => tx.type === 'Expense')
-        .reduce((sum, tx) => sum + tx.amount, 0),
-    [monthTx]
-  );
-
-  const monthNet = monthIncome - monthExpenses;
-  const savingsRate = monthIncome > 0 ? (monthNet / monthIncome) * 100 : 0;
-
-  const categoryTotals = useMemo(() => {
-    const totals: Record<string, number> = {};
-    monthTx
-      .filter((tx) => tx.type === 'Expense')
-      .forEach((tx) => {
-        totals[tx.category] = (totals[tx.category] || 0) + tx.amount;
-      });
-    return totals;
-  }, [monthTx]);
-
+  // Build comprehensive financial snapshot
   const financialSnapshot = useMemo(() => {
-    return {
-      userName,
+    return buildDetailedFinancialSnapshot(
+      transactions,
+      budgets,
+      goals,
+      recurring,
       selectedMonth,
       currencySymbol,
-      income: monthIncome,
-      expenses: monthExpenses,
-      net: monthNet,
-      savingsRatePercentage: savingsRate.toFixed(1),
       targetSavingsRate,
-      expensesByCategory: categoryTotals,
-      budgets: budgets.map((b) => ({
-        category: b.category,
-        monthlyLimit: b.monthlyLimit,
-        spentThisMonth: categoryTotals[b.category] || 0,
-        isOver: (categoryTotals[b.category] || 0) > b.monthlyLimit,
-      })),
-      savingsGoals: goals.map((g) => ({
-        name: g.name,
-        targetAmount: g.targetAmount,
-        savedAmount: g.savedAmount,
-        targetDate: g.targetDate,
-        percentComplete:
-          g.targetAmount > 0
-            ? ((g.savedAmount / g.targetAmount) * 100).toFixed(0)
-            : '0',
-      })),
-      recurringRules: recurring
-        .filter((r) => r.active)
-        .map((r) => ({
-          description: r.description,
-          category: r.category,
-          amount: r.amount,
-          type: r.type,
-          frequency: r.frequency,
-          nextDate: r.nextDate,
-        })),
-    };
+      userName
+    );
   }, [
-    userName,
-    selectedMonth,
-    currencySymbol,
-    monthIncome,
-    monthExpenses,
-    monthNet,
-    savingsRate,
-    targetSavingsRate,
-    categoryTotals,
+    transactions,
     budgets,
     goals,
     recurring,
+    selectedMonth,
+    currencySymbol,
+    targetSavingsRate,
+    userName,
   ]);
 
   const handleSend = (text: string) => {
@@ -168,75 +137,234 @@ export const AIAdvisorView: React.FC<AIAdvisorViewProps> = ({
     setInput('');
   };
 
+  const handleCopy = (id: string, text: string) => {
+    navigator.clipboard.writeText(text);
+    setCopiedId(id);
+    setTimeout(() => setCopiedId(null), 2000);
+  };
+
+  // Render markdown text cleanly
+  const renderMessageContent = (text: string) => {
+    const lines = text.split('\n');
+    const elements: React.ReactNode[] = [];
+    let tableRows: string[] = [];
+    let inTable = false;
+
+    const flushTable = () => {
+      if (tableRows.length > 0) {
+        const rows = tableRows.map((r) =>
+          r
+            .split('|')
+            .map((c) => c.trim())
+            .filter((c, i, arr) => (i > 0 && i < arr.length - 1) || c.length > 0)
+        );
+
+        if (rows.length >= 2) {
+          const header = rows[0];
+          const body = rows.slice(1).filter((r) => !r.every((c) => c.startsWith(':---') || c.startsWith('---')));
+          elements.push(
+            <div key={`table_${elements.length}`} className="my-3 overflow-x-auto rounded-xl border border-[#ECE7F0] bg-white">
+              <table className="w-full text-left text-xs border-collapse">
+                <thead>
+                  <tr className="bg-[#F8F6FA] border-b border-[#ECE7F0] text-[#554C63]">
+                    {header.map((col, idx) => (
+                      <th key={idx} className="px-3 py-2 font-semibold text-[11px]">
+                        {col.replace(/\*\*/g, '')}
+                      </th>
+                    ))}
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-[#F0ECF4]">
+                  {body.map((row, rIdx) => (
+                    <tr key={rIdx} className="hover:bg-[#FAF8FC]/80">
+                      {row.map((cell, cIdx) => (
+                        <td key={cIdx} className="px-3 py-2 text-[#2D2838]">
+                          {formatInlineMarkdown(cell)}
+                        </td>
+                      ))}
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          );
+        }
+        tableRows = [];
+        inTable = false;
+      }
+    };
+
+    lines.forEach((line, idx) => {
+      const trimmed = line.trim();
+
+      if (trimmed.startsWith('|') && trimmed.endsWith('|')) {
+        inTable = true;
+        tableRows.push(trimmed);
+        return;
+      } else if (inTable) {
+        flushTable();
+      }
+
+      if (trimmed.startsWith('### ')) {
+        elements.push(
+          <h4 key={idx} className="mt-3 mb-1.5 font-['Plus_Jakarta_Sans'] text-sm font-bold text-[#2A2338]">
+            {trimmed.replace('### ', '')}
+          </h4>
+        );
+      } else if (trimmed.startsWith('## ')) {
+        elements.push(
+          <h3 key={idx} className="mt-3.5 mb-2 font-['Plus_Jakarta_Sans'] text-base font-bold text-[#2A2338]">
+            {trimmed.replace('## ', '')}
+          </h3>
+        );
+      } else if (trimmed.startsWith('- ') || trimmed.startsWith('* ')) {
+        elements.push(
+          <div key={idx} className="flex items-start gap-2 my-1 text-xs text-[#373144] pl-1">
+            <span className="text-[#7867B5] mt-1 shrink-0 font-bold">•</span>
+            <div className="flex-1">{formatInlineMarkdown(trimmed.slice(2))}</div>
+          </div>
+        );
+      } else if (/^\d+\.\s/.test(trimmed)) {
+        const numberMatch = trimmed.match(/^(\d+)\.\s(.*)/);
+        if (numberMatch) {
+          elements.push(
+            <div key={idx} className="flex items-start gap-2 my-1 text-xs text-[#373144] pl-1">
+              <span className="font-semibold text-[#7867B5] shrink-0">{numberMatch[1]}.</span>
+              <div className="flex-1">{formatInlineMarkdown(numberMatch[2])}</div>
+            </div>
+          );
+        }
+      } else if (trimmed === '') {
+        elements.push(<div key={idx} className="h-1.5" />);
+      } else {
+        elements.push(
+          <p key={idx} className="my-1 text-xs text-[#373144] leading-relaxed">
+            {formatInlineMarkdown(trimmed)}
+          </p>
+        );
+      }
+    });
+
+    if (inTable) {
+      flushTable();
+    }
+
+    return elements;
+  };
+
+  const formatInlineMarkdown = (text: string) => {
+    // Replace **bold**
+    const parts = text.split(/(\*\*.*?\*\*)/g);
+    return parts.map((part, i) => {
+      if (part.startsWith('**') && part.endsWith('**')) {
+        return (
+          <strong key={i} className="font-semibold text-[#1F192B]">
+            {part.slice(2, -2)}
+          </strong>
+        );
+      }
+      return part;
+    });
+  };
+
   return (
     <div className="space-y-6">
-      {/* Hero Header */}
+      {/* Hero Header & Live Financial Intelligence Strip */}
       <div className="rounded-3xl border border-white/90 bg-white p-5 sm:p-6 shadow-xs">
         <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
           <div>
-            <div className="text-[10px] font-bold tracking-[0.16em] uppercase text-[#7867B5]">
-              GEMINI FINANCIAL INTELLIGENCE
+            <div className="flex items-center gap-2">
+              <span className="inline-flex items-center gap-1.5 rounded-full bg-[#EFEAF6] px-2.5 py-0.5 text-[10px] font-bold uppercase tracking-wider text-[#7867B5]">
+                <Sparkles className="h-3 w-3 text-[#7867B5]" />
+                FinPilot AI Copilot
+              </span>
+              <span className="text-[11px] font-medium text-[#7D768A]">
+                Connected to {getMonthLabel(selectedMonth)}
+              </span>
             </div>
-            <h2 className="mt-1 font-['Plus_Jakarta_Sans'] text-2xl font-bold tracking-tight text-[#29272F]">
-              AI Financial Copilot
+            <h2 className="mt-1.5 font-['Plus_Jakarta_Sans'] text-2xl font-bold tracking-tight text-[#29272F]">
+              Financial Advisor & Intelligence
             </h2>
-            <p className="text-xs text-[#7A7285]">
-              Personalized guidance grounded in your actual ledger for {getMonthLabel(selectedMonth)}.
+            <p className="mt-1 text-xs text-[#6F677A] max-w-xl">
+              Real-time cashflow analysis, 50/30/20 allocation blueprints, budget audits, and savings goals acceleration.
             </p>
           </div>
 
-          <div className="flex flex-wrap items-center gap-2">
-            {userName ? (
-              <div className="flex items-center gap-1.5 rounded-xl border border-[#D5CBE5] bg-[#F7F3FB] px-3 py-1.5 text-xs font-semibold text-[#533E8E]">
-                <User className="h-3.5 w-3.5 text-[#7867B5]" />
-                <span>Personalized for {userName}</span>
-              </div>
-            ) : (
-              <div className="flex items-center gap-1.5 rounded-xl bg-[#F0ECFA] px-3 py-1.5 text-xs font-semibold text-[#7867B5]">
-                <Sparkles className="h-3.5 w-3.5" />
-                <span>Grounded in {getMonthLabel(selectedMonth)}</span>
-              </div>
-            )}
-
+          <div className="flex items-center gap-2 sm:self-center">
             <button
               onClick={clearChat}
-              className="inline-flex items-center gap-1.5 rounded-xl border border-[#D5CBE5] bg-white px-3 py-1.5 text-xs font-semibold text-[#5B4E80] shadow-xs hover:bg-[#F8F5FC] transition-colors"
-              title="Start a fresh conversation"
+              className="flex items-center gap-1.5 rounded-xl border border-[#E4DDEB] bg-white px-3 py-1.5 text-xs font-semibold text-[#665D73] hover:bg-[#F9F7FA] hover:text-[#2A2338] transition-all"
             >
-              <RefreshCw className="h-3 w-3" />
-              <span>New Conversation</span>
+              <RefreshCw className="h-3.5 w-3.5" />
+              Reset Chat
             </button>
           </div>
         </div>
 
-        {/* Suggestion Chips */}
-        <div className="mt-5 pt-4 border-t border-[#F0EBF2]">
-          <div className="text-[11px] font-semibold text-[#6E6678] mb-2.5">
-            Quick analysis inquiries:
+        {/* Live Metrics Quick Strip */}
+        <div className="mt-5 grid grid-cols-2 gap-2.5 sm:grid-cols-4 pt-4 border-t border-[#F2EDF5]">
+          <div className="rounded-2xl border border-[#EFEBF4] bg-[#FAF8FC] p-3">
+            <div className="text-[10px] font-bold uppercase tracking-wider text-[#797285]">Recorded Inflow</div>
+            <div className="mt-1 font-['Plus_Jakarta_Sans'] text-sm font-bold text-[#3B7A57]">
+              {formatCurrency(financialSnapshot.income, currencySymbol)}
+            </div>
+          </div>
+          <div className="rounded-2xl border border-[#EFEBF4] bg-[#FAF8FC] p-3">
+            <div className="text-[10px] font-bold uppercase tracking-wider text-[#797285]">Recorded Outflow</div>
+            <div className="mt-1 font-['Plus_Jakarta_Sans'] text-sm font-bold text-[#8C3A4F]">
+              {formatCurrency(financialSnapshot.expenses, currencySymbol)}
+            </div>
+          </div>
+          <div className="rounded-2xl border border-[#EFEBF4] bg-[#FAF8FC] p-3">
+            <div className="text-[10px] font-bold uppercase tracking-wider text-[#797285]">Net Cashflow</div>
+            <div className={`mt-1 font-['Plus_Jakarta_Sans'] text-sm font-bold ${financialSnapshot.net >= 0 ? 'text-[#3B7A57]' : 'text-[#8C3A4F]'}`}>
+              {financialSnapshot.net >= 0 ? '+' : ''}{formatCurrency(financialSnapshot.net, currencySymbol)}
+            </div>
+          </div>
+          <div className="rounded-2xl border border-[#EFEBF4] bg-[#FAF8FC] p-3">
+            <div className="text-[10px] font-bold uppercase tracking-wider text-[#797285]">Health Score</div>
+            <div className="mt-1 font-['Plus_Jakarta_Sans'] text-sm font-bold text-[#7867B5] flex items-center gap-1.5">
+              <span>{financialSnapshot.healthScore}/100</span>
+              <span className="text-[10px] font-normal text-[#797285]">
+                ({financialSnapshot.healthScore >= 75 ? 'Strong' : 'Moderate'})
+              </span>
+            </div>
+          </div>
+        </div>
+
+        {/* Quick Topics */}
+        <div className="mt-4 pt-4 border-t border-[#F2EDF5]">
+          <div className="text-[11px] font-semibold text-[#483F57] mb-2 flex items-center gap-1.5">
+            <Sparkles className="h-3.5 w-3.5 text-[#7867B5]" />
+            Specialized Financial Inquiries:
           </div>
           <div className="flex flex-wrap gap-2">
-            {PROMPT_SUGGESTIONS.map((s, idx) => (
-              <button
-                key={idx}
-                onClick={() => handleSend(s)}
-                disabled={isLoading}
-                className="rounded-xl border border-[#E2D9E8] bg-[#FAF8FB] px-3 py-1.5 text-xs font-medium text-[#4D4556] hover:bg-white hover:border-[#A99BEA] hover:text-[#7867B5] disabled:opacity-50 transition-all text-left active:scale-[0.98]"
-              >
-                {s}
-              </button>
-            ))}
+            {CATEGORIZED_PROMPTS.map((item, idx) => {
+              const Icon = item.icon;
+              return (
+                <button
+                  key={idx}
+                  onClick={() => handleSend(item.text)}
+                  disabled={isLoading}
+                  className="group flex items-center gap-1.5 rounded-xl border border-[#E4DDEB] bg-white px-3 py-1.5 text-xs text-[#483F57] hover:border-[#7867B5] hover:bg-[#F7F4FB] hover:text-[#7867B5] active:scale-95 transition-all text-left disabled:opacity-50"
+                >
+                  <Icon className="h-3 w-3 text-[#7867B5] shrink-0" />
+                  <span>{item.text}</span>
+                </button>
+              );
+            })}
           </div>
         </div>
       </div>
 
       {/* Chat Thread */}
-      <div className="rounded-3xl border border-white/90 bg-white shadow-xs overflow-hidden flex flex-col h-[520px]">
-        {/* Messages scroll pane */}
-        <div className="flex-1 overflow-y-auto p-4 sm:p-6 space-y-4">
+      <div className="rounded-3xl border border-white/90 bg-white shadow-xs overflow-hidden flex flex-col min-h-[480px]">
+        {/* Messages */}
+        <div className="flex-1 p-4 sm:p-6 space-y-4 overflow-y-auto max-h-[580px]">
           {messages.map((m) => (
             <div
               key={m.id}
-              className={`flex gap-3 max-w-3xl ${
+              className={`flex gap-3 max-w-[92%] sm:max-w-[85%] ${
                 m.sender === 'user' ? 'ml-auto flex-row-reverse' : 'mr-auto'
               }`}
             >
@@ -251,19 +379,42 @@ export const AIAdvisorView: React.FC<AIAdvisorViewProps> = ({
               </div>
 
               <div
-                className={`rounded-2xl p-4 text-xs leading-relaxed shadow-xs ${
+                className={`relative group rounded-2xl p-4 text-xs leading-relaxed shadow-xs ${
                   m.sender === 'user'
                     ? 'bg-[#7867B5] text-white'
                     : 'border border-[#ECE7F0] bg-[#FAF8FC] text-[#29272F]'
                 }`}
               >
-                <div className="whitespace-pre-wrap space-y-2">{m.text}</div>
+                {m.sender === 'assistant' ? (
+                  <div className="space-y-1">{renderMessageContent(m.text)}</div>
+                ) : (
+                  <div className="whitespace-pre-wrap">{m.text}</div>
+                )}
+
                 <div
-                  className={`mt-2 text-[10px] ${
-                    m.sender === 'user' ? 'text-white/70 text-right' : 'text-[#898393]'
+                  className={`mt-2 flex items-center justify-between gap-3 text-[10px] ${
+                    m.sender === 'user' ? 'text-white/70' : 'text-[#898393]'
                   }`}
                 >
-                  {m.timestamp}
+                  <span>{m.timestamp}</span>
+                  {m.sender === 'assistant' && (
+                    <button
+                      onClick={() => handleCopy(m.id, m.text)}
+                      className="opacity-0 group-hover:opacity-100 flex items-center gap-1 text-[10px] text-[#7867B5] hover:underline transition-opacity"
+                    >
+                      {copiedId === m.id ? (
+                        <>
+                          <Check className="h-3 w-3 text-emerald-600" />
+                          <span>Copied</span>
+                        </>
+                      ) : (
+                        <>
+                          <Copy className="h-3 w-3" />
+                          <span>Copy analysis</span>
+                        </>
+                      )}
+                    </button>
+                  )}
                 </div>
               </div>
             </div>
@@ -276,11 +427,11 @@ export const AIAdvisorView: React.FC<AIAdvisorViewProps> = ({
               </div>
               <div className="flex items-center gap-2.5 rounded-2xl border border-[#ECE7F0] bg-[#FAF8FC] px-4 py-3 shadow-xs">
                 <RefreshCw className="h-3.5 w-3.5 animate-spin text-[#7867B5]" />
-                <span className="font-medium text-[#534C5D]">
-                  FinPilot AI is analyzing your ledger...
+                <span className="font-medium text-[#4D4559]">
+                  FinPilot AI is synthesizing your financial data...
                 </span>
                 <span className="text-[10px] text-[#8C8397] hidden sm:inline">
-                  (You can switch tabs anytime without losing your chat)
+                  (Safe to navigate across tabs anytime)
                 </span>
               </div>
             </div>
@@ -303,8 +454,8 @@ export const AIAdvisorView: React.FC<AIAdvisorViewProps> = ({
               type="text"
               placeholder={
                 userName
-                  ? `Ask a financial question, ${userName}...`
-                  : 'Ask about spending cuts, budgeting strategies, or goal timelines...'
+                  ? `Ask your financial copilot, ${userName}...`
+                  : 'Ask about cashflow, 50/30/20 breakdown, budget cuts, or savings...'
               }
               value={input}
               onChange={(e) => setInput(e.target.value)}
@@ -320,7 +471,7 @@ export const AIAdvisorView: React.FC<AIAdvisorViewProps> = ({
             </button>
           </form>
           <div className="mt-2 text-[10px] text-center text-[#898393]">
-            FinPilot AI provides educational financial analysis based on your records, not certified tax or investment advice.
+            FinPilot AI Copilot provides educational financial planning based on your recorded ledger, not certified tax or legal advice.
           </div>
         </div>
       </div>

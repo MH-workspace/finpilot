@@ -47,11 +47,13 @@ export function saveSettings(settings: UserSettings): void {
 export function loadTransactions(): Transaction[] {
   try {
     const raw = localStorage.getItem(STORAGE_KEYS.TRANSACTIONS);
-    if (!raw) return [];
+    if (!raw) {
+      return seedInitialTransactions();
+    }
     const parsed = JSON.parse(raw);
-    return Array.isArray(parsed) ? parsed : [];
+    return Array.isArray(parsed) && parsed.length > 0 ? parsed : seedInitialTransactions();
   } catch {
-    return [];
+    return seedInitialTransactions();
   }
 }
 
@@ -66,11 +68,13 @@ export function saveTransactions(data: Transaction[]): void {
 export function loadBudgets(): Budget[] {
   try {
     const raw = localStorage.getItem(STORAGE_KEYS.BUDGETS);
-    if (!raw) return [];
+    if (!raw) {
+      return seedInitialBudgets();
+    }
     const parsed = JSON.parse(raw);
-    return Array.isArray(parsed) ? parsed : [];
+    return Array.isArray(parsed) && parsed.length > 0 ? parsed : seedInitialBudgets();
   } catch {
-    return [];
+    return seedInitialBudgets();
   }
 }
 
@@ -85,11 +89,13 @@ export function saveBudgets(data: Budget[]): void {
 export function loadGoals(): SavingsGoal[] {
   try {
     const raw = localStorage.getItem(STORAGE_KEYS.GOALS);
-    if (!raw) return [];
+    if (!raw) {
+      return seedInitialGoals();
+    }
     const parsed = JSON.parse(raw);
-    return Array.isArray(parsed) ? parsed : [];
+    return Array.isArray(parsed) && parsed.length > 0 ? parsed : seedInitialGoals();
   } catch {
-    return [];
+    return seedInitialGoals();
   }
 }
 
@@ -104,11 +110,13 @@ export function saveGoals(data: SavingsGoal[]): void {
 export function loadRecurring(): RecurringRule[] {
   try {
     const raw = localStorage.getItem(STORAGE_KEYS.RECURRING);
-    if (!raw) return [];
+    if (!raw) {
+      return seedInitialRecurring();
+    }
     const parsed = JSON.parse(raw);
-    return Array.isArray(parsed) ? parsed : [];
+    return Array.isArray(parsed) && parsed.length > 0 ? parsed : seedInitialRecurring();
   } catch {
-    return [];
+    return seedInitialRecurring();
   }
 }
 
