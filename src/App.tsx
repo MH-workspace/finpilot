@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useMemo } from 'react';
+import React, { useState, useEffect, useMemo, useCallback } from 'react';
 import {
   ActivePage,
   Transaction,
@@ -6,8 +6,10 @@ import {
   SavingsGoal,
   RecurringRule,
   UserSettings,
+  BackupData,
 } from './types/finance';
 import {
+  DEFAULT_SETTINGS,
   loadTransactions,
   saveTransactions,
   loadBudgets,
@@ -20,6 +22,10 @@ import {
   saveSettings,
   resetToDemoData,
   clearAllUserData,
+  buildSampleDataset,
+  createFullBackup,
+  parseBackupForMerge,
+  restoreFullBackup,
 } from './utils/storage';
 import {
   getMonthString,
@@ -43,6 +49,7 @@ import { AuthModal } from './components/AuthModal';
 import { MobileBottomNav } from './components/MobileBottomNav';
 import { useAuth } from './context/AuthContext';
 import { useAIChat } from './context/AIChatContext';
+import { getReadableFirestoreError } from './firebase/config';
 import {
   subscribeToTransactions,
   subscribeToBudgets,
@@ -59,6 +66,7 @@ import {
   deleteRecurringFromFirestore,
   saveUserSettingsToFirestore,
   syncLocalDataToFirestore,
+  wipeUserCloudData,
 } from './firebase/firestoreService';
 import {
   CheckCircle2,
@@ -66,10 +74,19 @@ import {
   Cloud,
   Sparkles,
   WifiOff,
+  RefreshCw,
 } from 'lucide-react';
 
 export default function App() {
-  const { user, authError, clearAuthError, signInWithGoogle } = useAuth();
+  const {
+    user,
+    loading: authLoading,
+    authError,
+    clearAuthError,
+    setIsAuthModalOpen,
+    setAuthModalMode,
+  } = useAuth();
+
   const [activePage, setActivePage] = useState<ActivePage>('Dashboard');
   const [selectedMonth, setSelectedMonth] = useState<string>(getMonthString());
   const [monthList] = useState<string[]>(generateMonthList(24));
@@ -83,7 +100,12 @@ export default function App() {
   const [budgets, setBudgets] = useState<Budget[]>([]);
   const [goals, setGoals] = useState<SavingsGoal[]>([]);
   const [recurring, setRecurring] = useState<RecurringRule[]>([]);
-  const [settings, setSettings] = useState<UserSettings>(loadSettings());
+  const [settings, setSettings] = useState<UserSettings>(DEFAULT_SETTINGS);
+
+  // Cloud synchronization & error states
+  const [isCloudLoading, setIsCloudLoading] = useState(false);
+  const [cloudError, setCloudError] = useState<string | null>(null);
+  const [listenerEpoch, setListenerEpoch] = useState(0);
 
   // Friendly name for logged in user (used for AI Copilot and greetings)
   const userFriendlyName = useMemo(() => {
@@ -116,21 +138,26 @@ export default function App() {
     type: 'success' | 'info' | 'error';
   } | null>(null);
 
-  const showToast = (
-    message: string,
-    type: 'success' | 'info' | 'error' = 'success'
-  ) => {
-    setToast({ message, type });
-    setTimeout(() => setToast(null), 3800);
-  };
+  const showToast = useCallback(
+    (message: string, type: 'success' | 'info' | 'error' = 'success') => {
+      setToast({ message, type });
+      setTimeout(() => {
+        setToast((prev) => (prev?.message === message ? null : prev));
+      }, 4200);
+    },
+    []
+  );
 
   const { hasUnreadReply } = useAIChat();
 
   useEffect(() => {
     if (hasUnreadReply && activePage !== 'AI Assistant') {
-      showToast('FinPilot AI Copilot has prepared your financial advice. Tap "Ask AI" to view.', 'info');
+      showToast(
+        'FinPilot AI Copilot has prepared your financial analysis. Tap "Ask AI" to view.',
+        'info'
+      );
     }
-  }, [hasUnreadReply, activePage]);
+  }, [hasUnreadReply, activePage, showToast]);
 
   // Online / Offline tracking
   useEffect(() => {
@@ -144,29 +171,67 @@ export default function App() {
     };
   }, []);
 
-  // Sync / Listen to Firestore when user is signed in, or LocalStorage when signed out
+  // Strictly isolate authenticated Firestore data per UID vs unauthenticated Guest Mode
   useEffect(() => {
-    if (user) {
-      const unsubTx = subscribeToTransactions(user.uid, (cloudTxs) => {
-        setTransactions(cloudTxs);
-        saveTransactions(cloudTxs);
-      });
-      const unsubBudgets = subscribeToBudgets(user.uid, (cloudBudgets) => {
-        setBudgets(cloudBudgets);
-        saveBudgets(cloudBudgets);
-      });
-      const unsubGoals = subscribeToGoals(user.uid, (cloudGoals) => {
-        setGoals(cloudGoals);
-        saveGoals(cloudGoals);
-      });
-      const unsubRecurring = subscribeToRecurring(user.uid, (cloudRecurring) => {
-        setRecurring(cloudRecurring);
-        saveRecurring(cloudRecurring);
-      });
-      const unsubSettings = subscribeToUserSettings(user.uid, (cloudSettings) => {
-        setSettings(cloudSettings);
-        saveSettings(cloudSettings);
-      });
+    if (authLoading) return;
+
+    if (user?.uid) {
+      const activeUid = user.uid;
+      // Clear any previous/guest records immediately before attaching user-isolated listeners
+      setTransactions([]);
+      setBudgets([]);
+      setGoals([]);
+      setRecurring([]);
+      setSettings(DEFAULT_SETTINGS);
+      setIsCloudLoading(true);
+      setCloudError(null);
+
+      const handleSnapshotError = (errMessage: string) => {
+        setCloudError(errMessage);
+        setIsCloudLoading(false);
+      };
+
+      const unsubTx = subscribeToTransactions(
+        activeUid,
+        (cloudTxs) => {
+          setTransactions(cloudTxs);
+          setIsCloudLoading(false);
+          setCloudError(null);
+        },
+        handleSnapshotError
+      );
+
+      const unsubBudgets = subscribeToBudgets(
+        activeUid,
+        (cloudBudgets) => {
+          setBudgets(cloudBudgets);
+        },
+        handleSnapshotError
+      );
+
+      const unsubGoals = subscribeToGoals(
+        activeUid,
+        (cloudGoals) => {
+          setGoals(cloudGoals);
+        },
+        handleSnapshotError
+      );
+
+      const unsubRecurring = subscribeToRecurring(
+        activeUid,
+        (cloudRecurring) => {
+          setRecurring(cloudRecurring);
+        },
+        handleSnapshotError
+      );
+
+      const unsubSettings = subscribeToUserSettings(
+        activeUid,
+        (cloudSettings) => {
+          setSettings(cloudSettings);
+        },
+        handleSnapshotError
+      );
 
       return () => {
         unsubTx();
@@ -176,14 +241,16 @@ export default function App() {
         unsubSettings();
       };
     } else {
-      // Local storage for guest mode
+      // Guest Mode: isolated strictly to local device storage
+      setIsCloudLoading(false);
+      setCloudError(null);
       setTransactions(loadTransactions());
       setBudgets(loadBudgets());
       setGoals(loadGoals());
       setRecurring(loadRecurring());
       setSettings(loadSettings());
     }
-  }, [user]);
+  }, [user?.uid, authLoading, listenerEpoch]);
 
   // Derived Financial Statistics for active month
   const monthStats = useMemo(() => {
@@ -202,7 +269,7 @@ export default function App() {
   const handleSaveTransaction = async (
     txData: Omit<Transaction, 'id'>,
     existingId?: string
-  ) => {
+  ): Promise<boolean> => {
     const targetId =
       existingId || `tx_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`;
     const fullTx: Transaction = {
@@ -214,25 +281,24 @@ export default function App() {
       try {
         await saveTransactionToFirestore(user.uid, fullTx);
         showToast(
-          existingId
-            ? 'Transaction updated in your cloud ledger.'
-            : 'Transaction saved to your cloud ledger.',
+          existingId ? 'Transaction updated in cloud ledger.' : 'Transaction recorded in cloud ledger.',
           'success'
         );
-      } catch {
-        showToast('Unable to save to cloud. Please check your connection.', 'error');
+        return true;
+      } catch (err) {
+        const msg = getReadableFirestoreError(err);
+        showToast(msg, 'error');
+        return false;
       }
-    } else {
-      const next = existingId
-        ? transactions.map((t) => (t.id === existingId ? fullTx : t))
-        : [fullTx, ...transactions];
-      setTransactions(next);
-      saveTransactions(next);
-      showToast(
-        existingId ? 'Transaction updated.' : 'Transaction recorded in your ledger.',
-        'success'
-      );
     }
+
+    const next = existingId
+      ? transactions.map((t) => (t.id === existingId ? fullTx : t))
+      : [fullTx, ...transactions];
+    setTransactions(next);
+    saveTransactions(next);
+    showToast(existingId ? 'Transaction updated.' : 'Transaction recorded locally.', 'success');
+    return true;
   };
 
   const handleAddTransactionDirect = async (
@@ -256,19 +322,19 @@ export default function App() {
     if (user) {
       try {
         await saveTransactionToFirestore(user.uid, newTx);
-        showToast('Transaction recorded in your cloud ledger.', 'success');
+        showToast('Transaction recorded in cloud ledger.', 'success');
         return true;
-      } catch {
-        showToast('Unable to record to cloud database.', 'error');
+      } catch (err) {
+        showToast(getReadableFirestoreError(err), 'error');
         return false;
       }
-    } else {
-      const next = [newTx, ...transactions];
-      setTransactions(next);
-      saveTransactions(next);
-      showToast('Transaction recorded in your ledger.', 'success');
-      return true;
     }
+
+    const next = [newTx, ...transactions];
+    setTransactions(next);
+    saveTransactions(next);
+    showToast('Transaction recorded locally.', 'success');
+    return true;
   };
 
   const handleDeleteTransaction = async (id: string) => {
@@ -276,15 +342,16 @@ export default function App() {
       try {
         await deleteTransactionFromFirestore(user.uid, id);
         showToast('Transaction permanently removed.', 'success');
-      } catch {
-        showToast('Failed to remove transaction from cloud.', 'error');
+      } catch (err) {
+        showToast(getReadableFirestoreError(err), 'error');
       }
-    } else {
-      const filtered = transactions.filter((t) => t.id !== id);
-      setTransactions(filtered);
-      saveTransactions(filtered);
-      showToast('Transaction permanently removed.', 'success');
+      return;
     }
+
+    const filtered = transactions.filter((t) => t.id !== id);
+    setTransactions(filtered);
+    saveTransactions(filtered);
+    showToast('Transaction permanently removed.', 'success');
   };
 
   // Budget Handlers
@@ -293,20 +360,21 @@ export default function App() {
       try {
         await saveBudgetToFirestore(user.uid, category, monthlyLimit);
         showToast(`Budget limit set for ${category}.`, 'success');
-      } catch {
-        showToast('Failed to update budget in cloud.', 'error');
+      } catch (err) {
+        showToast(getReadableFirestoreError(err), 'error');
       }
-    } else {
-      const exists = budgets.some((b) => b.category.toLowerCase() === category.toLowerCase());
-      const next = exists
-        ? budgets.map((b) =>
-            b.category.toLowerCase() === category.toLowerCase() ? { ...b, monthlyLimit } : b
-          )
-        : [...budgets, { category, monthlyLimit }];
-      setBudgets(next);
-      saveBudgets(next);
-      showToast(`Budget limit set for ${category}.`, 'success');
+      return;
     }
+
+    const exists = budgets.some((b) => b.category.toLowerCase() === category.toLowerCase());
+    const next = exists
+      ? budgets.map((b) =>
+          b.category.toLowerCase() === category.toLowerCase() ? { ...b, monthlyLimit } : b
+        )
+      : [...budgets, { category, monthlyLimit }];
+    setBudgets(next);
+    saveBudgets(next);
+    showToast(`Budget limit set for ${category}.`, 'success');
   };
 
   const handleDeleteBudget = async (category: string) => {
@@ -314,15 +382,16 @@ export default function App() {
       try {
         await deleteBudgetFromFirestore(user.uid, category);
         showToast(`Budget for ${category} removed.`, 'success');
-      } catch {
-        showToast('Failed to remove budget from cloud.', 'error');
+      } catch (err) {
+        showToast(getReadableFirestoreError(err), 'error');
       }
-    } else {
-      const next = budgets.filter((b) => b.category !== category);
-      setBudgets(next);
-      saveBudgets(next);
-      showToast(`Budget for ${category} removed.`, 'success');
+      return;
     }
+
+    const next = budgets.filter((b) => b.category !== category);
+    setBudgets(next);
+    saveBudgets(next);
+    showToast(`Budget for ${category} removed.`, 'success');
   };
 
   // Goals Handlers
@@ -336,15 +405,16 @@ export default function App() {
       try {
         await saveGoalToFirestore(user.uid, newGoal);
         showToast(`Savings goal "${goalData.name}" created.`, 'success');
-      } catch {
-        showToast('Failed to create savings goal in cloud.', 'error');
+      } catch (err) {
+        showToast(getReadableFirestoreError(err), 'error');
       }
-    } else {
-      const next = [...goals, newGoal];
-      setGoals(next);
-      saveGoals(next);
-      showToast(`Savings goal "${goalData.name}" created.`, 'success');
+      return;
     }
+
+    const next = [...goals, newGoal];
+    setGoals(next);
+    saveGoals(next);
+    showToast(`Savings goal "${goalData.name}" created.`, 'success');
   };
 
   const handleUpdateGoal = async (id: string, updates: Partial<SavingsGoal>) => {
@@ -356,15 +426,16 @@ export default function App() {
       try {
         await saveGoalToFirestore(user.uid, updated);
         showToast('Goal progress updated.', 'success');
-      } catch {
-        showToast('Failed to update goal progress in cloud.', 'error');
+      } catch (err) {
+        showToast(getReadableFirestoreError(err), 'error');
       }
-    } else {
-      const next = goals.map((g) => (g.id === id ? updated : g));
-      setGoals(next);
-      saveGoals(next);
-      showToast('Goal progress updated.', 'success');
+      return;
     }
+
+    const next = goals.map((g) => (g.id === id ? updated : g));
+    setGoals(next);
+    saveGoals(next);
+    showToast('Goal progress updated.', 'success');
   };
 
   const handleDeleteGoal = async (id: string) => {
@@ -372,15 +443,16 @@ export default function App() {
       try {
         await deleteGoalFromFirestore(user.uid, id);
         showToast('Savings goal deleted.', 'success');
-      } catch {
-        showToast('Failed to delete goal from cloud.', 'error');
+      } catch (err) {
+        showToast(getReadableFirestoreError(err), 'error');
       }
-    } else {
-      const next = goals.filter((g) => g.id !== id);
-      setGoals(next);
-      saveGoals(next);
-      showToast('Savings goal deleted.', 'success');
+      return;
     }
+
+    const next = goals.filter((g) => g.id !== id);
+    setGoals(next);
+    saveGoals(next);
+    showToast('Savings goal deleted.', 'success');
   };
 
   // Recurring Handlers
@@ -394,15 +466,16 @@ export default function App() {
       try {
         await saveRecurringToFirestore(user.uid, newRule);
         showToast('Recurring rule created.', 'success');
-      } catch {
-        showToast('Failed to save recurring rule to cloud.', 'error');
+      } catch (err) {
+        showToast(getReadableFirestoreError(err), 'error');
       }
-    } else {
-      const next = [...recurring, newRule];
-      setRecurring(next);
-      saveRecurring(next);
-      showToast('Recurring rule created.', 'success');
+      return;
     }
+
+    const next = [...recurring, newRule];
+    setRecurring(next);
+    saveRecurring(next);
+    showToast('Recurring rule created.', 'success');
   };
 
   const handleUpdateRecurring = async (id: string, updates: Partial<RecurringRule>) => {
@@ -414,15 +487,16 @@ export default function App() {
       try {
         await saveRecurringToFirestore(user.uid, updated);
         showToast('Recurring rule updated.', 'success');
-      } catch {
-        showToast('Failed to update recurring rule in cloud.', 'error');
+      } catch (err) {
+        showToast(getReadableFirestoreError(err), 'error');
       }
-    } else {
-      const next = recurring.map((r) => (r.id === id ? updated : r));
-      setRecurring(next);
-      saveRecurring(next);
-      showToast('Recurring rule updated.', 'success');
+      return;
     }
+
+    const next = recurring.map((r) => (r.id === id ? updated : r));
+    setRecurring(next);
+    saveRecurring(next);
+    showToast('Recurring rule updated.', 'success');
   };
 
   const handleDeleteRecurring = async (id: string) => {
@@ -430,15 +504,16 @@ export default function App() {
       try {
         await deleteRecurringFromFirestore(user.uid, id);
         showToast('Recurring schedule removed.', 'success');
-      } catch {
-        showToast('Failed to delete recurring rule from cloud.', 'error');
+      } catch (err) {
+        showToast(getReadableFirestoreError(err), 'error');
       }
-    } else {
-      const next = recurring.filter((r) => r.id !== id);
-      setRecurring(next);
-      saveRecurring(next);
-      showToast('Recurring schedule removed.', 'success');
+      return;
     }
+
+    const next = recurring.filter((r) => r.id !== id);
+    setRecurring(next);
+    saveRecurring(next);
+    showToast('Recurring schedule removed.', 'success');
   };
 
   // Process Due Recurring items
@@ -451,6 +526,9 @@ export default function App() {
     }
 
     try {
+      const addedGuestTxs: Transaction[] = [];
+      let updatedGuestRules = [...recurring];
+
       for (const rule of dueRules) {
         const newTx: Transaction = {
           id: `tx_rec_${Date.now()}_${Math.random().toString(36).substring(2, 5)}`,
@@ -472,74 +550,159 @@ export default function App() {
           await saveTransactionToFirestore(user.uid, newTx);
           await saveRecurringToFirestore(user.uid, updatedRule);
         } else {
-          setTransactions((prev) => [newTx, ...prev]);
-          setRecurring((prev) => prev.map((r) => (r.id === rule.id ? updatedRule : r)));
+          addedGuestTxs.push(newTx);
+          updatedGuestRules = updatedGuestRules.map((r) =>
+            r.id === rule.id ? updatedRule : r
+          );
         }
       }
+
+      if (!user) {
+        const nextTxs = [...addedGuestTxs, ...transactions];
+        setTransactions(nextTxs);
+        saveTransactions(nextTxs);
+        setRecurring(updatedGuestRules);
+        saveRecurring(updatedGuestRules);
+      }
+
       showToast(`Posted ${dueRules.length} due transaction(s) and advanced schedule dates.`);
-    } catch {
-      showToast('Could not process all due items. Please verify your connection.', 'error');
+    } catch (err) {
+      showToast(getReadableFirestoreError(err), 'error');
     }
   };
 
-  const handleUpdateUserSettings = async (newSettings: UserSettings) => {
-    setSettings(newSettings);
-    saveSettings(newSettings);
+  const handleUpdateUserSettings = async (newSettings: UserSettings): Promise<boolean> => {
     if (user) {
       try {
         await saveUserSettingsToFirestore(user.uid, newSettings);
-        showToast('Settings saved to cloud.', 'success');
-      } catch {
-        showToast('Settings saved locally. Could not sync to cloud.', 'info');
+        setSettings(newSettings);
+        showToast('Settings saved to your cloud profile.', 'success');
+        return true;
+      } catch (err) {
+        showToast(getReadableFirestoreError(err), 'error');
+        return false;
       }
-    } else {
-      showToast('Settings saved.', 'success');
     }
+
+    setSettings(newSettings);
+    saveSettings(newSettings);
+    showToast('Settings saved locally.', 'success');
+    return true;
   };
 
-  // Reset or Load Sample Data explicitly requested by user
-  const handleResetDemoData = async () => {
-    resetToDemoData();
-    const txs = loadTransactions();
-    const bgts = loadBudgets();
-    const gls = loadGoals();
-    const recs = loadRecurring();
-    setTransactions(txs);
-    setBudgets(bgts);
-    setGoals(gls);
-    setRecurring(recs);
+  const handleCreateSessionBackup = useCallback((): BackupData => {
+    return createFullBackup({
+      transactions,
+      budgets,
+      goals,
+      recurring,
+      settings,
+    });
+  }, [transactions, budgets, goals, recurring, settings]);
 
+  const handleRestoreSessionBackup = async (
+    backupData: BackupData
+  ): Promise<{
+    transactionsCount: number;
+    budgetsCount: number;
+    goalsCount: number;
+    recurringCount: number;
+  }> => {
+    if (user) {
+      const parsed = parseBackupForMerge(backupData, transactions);
+      await syncLocalDataToFirestore(
+        user.uid,
+        parsed.addedTransactions,
+        parsed.budgets,
+        parsed.goals,
+        parsed.recurring,
+        parsed.settings
+      );
+      return {
+        transactionsCount: parsed.addedTransactions.length,
+        budgetsCount: parsed.budgets.length,
+        goalsCount: parsed.goals.length,
+        recurringCount: parsed.recurring.length,
+      };
+    }
+
+    const stats = restoreFullBackup(backupData);
+    setTransactions(loadTransactions());
+    setBudgets(loadBudgets());
+    setGoals(loadGoals());
+    setRecurring(loadRecurring());
+    setSettings(loadSettings());
+    return stats;
+  };
+
+  // Load Sample Data ONLY when explicitly clicked by user
+  const handleResetDemoData = async (): Promise<boolean> => {
     if (user) {
       try {
-        await syncLocalDataToFirestore(user.uid, txs, bgts, gls, recs, settings);
-        showToast('Sample dataset loaded and synced to your cloud account.', 'info');
-      } catch {
-        showToast('Sample dataset loaded locally.', 'info');
+        const sample = buildSampleDataset();
+        await syncLocalDataToFirestore(
+          user.uid,
+          sample.transactions,
+          sample.budgets,
+          sample.goals,
+          sample.recurring,
+          settings
+        );
+        showToast('Sample dataset loaded into your cloud account.', 'info');
+        return true;
+      } catch (err) {
+        showToast(getReadableFirestoreError(err), 'error');
+        return false;
       }
-    } else {
-      showToast('Sample financial records loaded for exploration.', 'info');
     }
+
+    resetToDemoData();
+    setTransactions(loadTransactions());
+    setBudgets(loadBudgets());
+    setGoals(loadGoals());
+    setRecurring(loadRecurring());
+    showToast('Sample financial records loaded locally.', 'info');
+    return true;
   };
 
   // Wipe All Data
-  const handleWipeAllData = async () => {
-    clearAllUserData();
+  const handleWipeAllData = async (): Promise<boolean> => {
     if (user) {
       try {
-        for (const t of transactions) await deleteTransactionFromFirestore(user.uid, t.id);
-        for (const b of budgets) await deleteBudgetFromFirestore(user.uid, b.category);
-        for (const g of goals) await deleteGoalFromFirestore(user.uid, g.id);
-        for (const r of recurring) await deleteRecurringFromFirestore(user.uid, r.id);
-      } catch {
-        console.warn('Wipe encountered cloud errors.');
+        await wipeUserCloudData(user.uid);
+        showToast('All cloud financial records permanently wiped.', 'info');
+        return true;
+      } catch (err) {
+        showToast(getReadableFirestoreError(err), 'error');
+        return false;
       }
     }
+
+    clearAllUserData();
     setTransactions([]);
     setBudgets([]);
     setGoals([]);
     setRecurring([]);
-    showToast('All financial records permanently wiped.', 'info');
+    showToast('All local financial records permanently wiped.', 'info');
+    return true;
   };
+
+  // Prevent flashing logged-out / guest mode while Firebase restores session on refresh
+  if (authLoading) {
+    return (
+      <div className="flex min-h-screen flex-col items-center justify-center bg-[#F5F1F3] text-[#29272F] p-6">
+        <div className="flex flex-col items-center gap-3 rounded-3xl border border-white/90 bg-white/90 px-8 py-7 shadow-xs">
+          <span className="flex h-10 w-10 items-center justify-center rounded-2xl bg-gradient-to-br from-[#A99BEA] to-[#8C7BD0] text-xl font-bold text-white shadow-sm">
+            ✳
+          </span>
+          <div className="flex items-center gap-2 text-xs font-semibold text-[#585160]">
+            <RefreshCw className="h-3.5 w-3.5 animate-spin text-[#7867B5]" />
+            <span>Restoring your FinPilot workspace...</span>
+          </div>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className="flex min-h-screen bg-[#F5F1F3] text-[#29272F]">
@@ -576,14 +739,48 @@ export default function App() {
             <div className="flex items-center gap-2">
               <WifiOff className="h-4 w-4 shrink-0 text-amber-600" />
               <span>
-                Working in offline mode. Changes are safely saved to this device and will sync when you reconnect.
+                You are currently offline. Reconnect to synchronize cloud updates and AI analysis.
               </span>
             </div>
           </div>
         )}
 
-        {/* Cloud onboarding banner when account has no records yet */}
-        {user && transactions.length === 0 && (
+        {/* Cloud Loading Indicator */}
+        {user && isCloudLoading && (
+          <div className="mx-4 md:mx-8 mt-3 flex items-center gap-2.5 rounded-2xl border border-[#DFD6EE] bg-[#FAF8FC] p-3.5 text-xs text-[#534C5D]">
+            <RefreshCw className="h-4 w-4 animate-spin text-[#7867B5] shrink-0" />
+            <span>Loading your encrypted cloud ledger for {user.email}...</span>
+          </div>
+        )}
+
+        {/* Firestore Cloud Error Banner */}
+        {user && cloudError && (
+          <div className="mx-4 md:mx-8 mt-3 flex flex-col sm:flex-row sm:items-center justify-between gap-3 rounded-2xl border border-rose-200 bg-rose-50/90 p-3.5 text-xs text-rose-800 animate-in fade-in">
+            <div className="flex items-center gap-2">
+              <AlertCircle className="h-4 w-4 shrink-0 text-rose-600" />
+              <span className="font-semibold">{cloudError}</span>
+            </div>
+            <div className="flex items-center gap-2 self-end sm:self-auto">
+              <button
+                onClick={() => setListenerEpoch((n) => n + 1)}
+                className="inline-flex items-center gap-1 rounded-lg bg-rose-600 px-2.5 py-1 text-[11px] font-semibold text-white hover:bg-rose-700 transition-colors"
+              >
+                <RefreshCw className="h-3 w-3" />
+                <span>Reconnect</span>
+              </button>
+              <button
+                onClick={() => setCloudError(null)}
+                className="text-rose-600 hover:text-rose-800 p-1 text-sm font-bold"
+                aria-label="Dismiss cloud error"
+              >
+                ✕
+              </button>
+            </div>
+          </div>
+        )}
+
+        {/* Cloud onboarding banner when account has loaded and has no records yet */}
+        {user && !isCloudLoading && !cloudError && transactions.length === 0 && (
           <div className="mx-4 md:mx-8 mt-4 flex flex-col sm:flex-row sm:items-center justify-between gap-3 rounded-2xl border border-[#AA9FF1]/60 bg-[#FAF7FD] p-3.5 text-xs">
             <div className="flex items-center gap-2.5">
               <Cloud className="h-4 w-4 text-[#7867B5] shrink-0" />
@@ -602,7 +799,7 @@ export default function App() {
                 <span>+ Add First Entry</span>
               </button>
               <button
-                onClick={handleResetDemoData}
+                onClick={() => void handleResetDemoData()}
                 className="inline-flex items-center gap-1 rounded-xl border border-[#D5CBE5] bg-white px-3 py-1.5 font-semibold text-[#6857A4] hover:bg-[#F3EEF9] transition-colors whitespace-nowrap"
               >
                 <Sparkles className="h-3.5 w-3.5" />
@@ -612,19 +809,22 @@ export default function App() {
           </div>
         )}
 
-        {/* Auth Error Banner */}
+        {/* Auth Error Banner (shown when modal is closed) */}
         {authError && (
           <div className="mx-4 md:mx-8 mt-3 flex items-center justify-between gap-3 rounded-2xl border border-rose-200 bg-rose-50/90 p-3.5 text-xs text-rose-800 animate-in fade-in">
             <div className="flex items-center gap-2">
               <AlertCircle className="h-4 w-4 shrink-0 text-rose-600" />
               <span className="font-semibold">{authError}</span>
             </div>
-            <div className="flex items-center gap-2">
+            <div className="flex items-center gap-2 shrink-0">
               <button
-                onClick={() => signInWithGoogle()}
+                onClick={() => {
+                  setAuthModalMode('signin');
+                  setIsAuthModalOpen(true);
+                }}
                 className="rounded-lg bg-rose-600 px-2.5 py-1 text-[11px] font-semibold text-white hover:bg-rose-700 transition-colors"
               >
-                Try Again
+                Open Sign-In
               </button>
               <button
                 onClick={clearAuthError}
@@ -640,7 +840,7 @@ export default function App() {
         {/* Global Toast Notification */}
         {toast && (
           <div
-            className={`fixed top-20 right-6 z-50 flex items-center gap-2 rounded-2xl border px-4 py-2.5 text-xs font-semibold shadow-xl transition-all animate-in fade-in slide-in-from-top-2 ${
+            className={`fixed top-20 right-6 z-50 flex items-center gap-2 rounded-2xl border px-4 py-2.5 text-xs font-semibold shadow-xl transition-all animate-in fade-in slide-in-from-top-2 max-w-sm ${
               toast.type === 'error'
                 ? 'border-rose-300 bg-rose-600 text-white'
                 : toast.type === 'info'
@@ -680,22 +880,12 @@ export default function App() {
             <TransactionsView
               transactions={transactions}
               onAddTransaction={handleAddTransactionDirect}
-              onUpdateTransaction={(id, tx) => handleSaveTransaction(tx, id)}
+              onUpdateTransaction={(id, tx) => void handleSaveTransaction(tx, id)}
               onDeleteTransaction={handleDeleteTransaction}
               currencySymbol={settings.currency.symbol}
+              onCreateBackup={handleCreateSessionBackup}
+              onRestoreBackupData={handleRestoreSessionBackup}
               onDataRestored={() => {
-                if (user) {
-                  const txs = loadTransactions();
-                  const bgts = loadBudgets();
-                  const gls = loadGoals();
-                  const recs = loadRecurring();
-                  syncLocalDataToFirestore(user.uid, txs, bgts, gls, recs, settings);
-                } else {
-                  setTransactions(loadTransactions());
-                  setBudgets(loadBudgets());
-                  setGoals(loadGoals());
-                  setRecurring(loadRecurring());
-                }
                 showToast('Financial backup restored.');
               }}
               onOpenEditModal={(tx) => {
@@ -768,6 +958,7 @@ export default function App() {
                 goalsCount: goals.length,
                 recurringCount: recurring.length,
               }}
+              onCreateBackup={handleCreateSessionBackup}
               onResetDemoData={handleResetDemoData}
               onWipeAllData={handleWipeAllData}
             />

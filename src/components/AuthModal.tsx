@@ -28,6 +28,7 @@ export const AuthModal: React.FC = () => {
   if (!isAuthModalOpen) return null;
 
   const handleClose = () => {
+    if (isSubmitting) return;
     setIsAuthModalOpen(false);
     clearAuthError();
     setLocalError(null);
@@ -35,14 +36,20 @@ export const AuthModal: React.FC = () => {
   };
 
   const handleGoogleSignIn = async () => {
-    setIsSubmitting(true);
+    if (isSubmitting) return;
     setLocalError(null);
-    await signInWithGoogle();
-    setIsSubmitting(false);
+    setIsSubmitting(true);
+    try {
+      await signInWithGoogle();
+    } finally {
+      setIsSubmitting(false);
+    }
   };
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (isSubmitting) return;
+
     setLocalError(null);
     clearAuthError();
 
@@ -53,16 +60,19 @@ export const AuthModal: React.FC = () => {
 
     if (authModalMode === 'forgot') {
       setIsSubmitting(true);
-      const ok = await resetPassword(email.trim());
-      setIsSubmitting(false);
-      if (ok) {
-        setResetSent(true);
+      try {
+        const ok = await resetPassword(email.trim());
+        if (ok) {
+          setResetSent(true);
+        }
+      } finally {
+        setIsSubmitting(false);
       }
       return;
     }
 
     if (!password) {
-      setLocalError('Please enter a password.');
+      setLocalError('Please enter your password.');
       return;
     }
 
@@ -77,17 +87,26 @@ export const AuthModal: React.FC = () => {
       }
 
       setIsSubmitting(true);
-      await signUpWithEmail(email.trim(), password, displayName.trim());
-      setIsSubmitting(false);
+      try {
+        await signUpWithEmail(email.trim(), password, displayName.trim());
+      } finally {
+        setIsSubmitting(false);
+      }
     } else {
       setIsSubmitting(true);
-      await signInWithEmail(email.trim(), password);
-      setIsSubmitting(false);
+      try {
+        await signInWithEmail(email.trim(), password);
+      } finally {
+        setIsSubmitting(false);
+      }
     }
   };
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-neutral-900/40 backdrop-blur-xs animate-in fade-in duration-150">
+    <div
+      className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-neutral-900/40 backdrop-blur-xs animate-in fade-in duration-150"
+      onClick={handleClose}
+    >
       <div
         className="w-full max-w-md max-h-[92vh] overflow-y-auto rounded-3xl border border-white/90 bg-[#FAF8FC] p-6 shadow-2xl transition-all"
         onClick={(e) => e.stopPropagation()}
@@ -105,15 +124,17 @@ export const AuthModal: React.FC = () => {
                 {authModalMode === 'forgot' && 'Reset your password'}
               </h3>
               <p className="text-[11px] text-[#7A7285]">
-                {authModalMode === 'signin' && 'Access your private financial records securely'}
+                {authModalMode === 'signin' && 'Access your private cloud financial ledger securely'}
                 {authModalMode === 'signup' && 'Start organizing your cashflow and wealth targets'}
                 {authModalMode === 'forgot' && 'We will send a secure password recovery link'}
               </p>
             </div>
           </div>
           <button
+            type="button"
             onClick={handleClose}
-            className="flex h-8 w-8 items-center justify-center rounded-full text-[#898393] hover:bg-[#EAE5EC] transition-colors"
+            disabled={isSubmitting}
+            className="flex h-8 w-8 items-center justify-center rounded-full text-[#898393] hover:bg-[#EAE5EC] transition-colors disabled:opacity-50"
             aria-label="Close"
           >
             <X className="h-4 w-4" />
@@ -122,7 +143,7 @@ export const AuthModal: React.FC = () => {
 
         {/* Feedback / Error Alerts */}
         {(authError || localError) && (
-          <div className="mt-4 flex items-start gap-2 rounded-2xl border border-rose-200 bg-rose-50 p-3.5 text-xs text-rose-800">
+          <div className="mt-4 flex items-start gap-2 rounded-2xl border border-rose-200 bg-rose-50 p-3.5 text-xs text-rose-800 leading-relaxed">
             <AlertCircle className="h-4 w-4 shrink-0 text-rose-600 mt-0.5" />
             <div className="flex-1">{localError || authError}</div>
           </div>
@@ -137,7 +158,7 @@ export const AuthModal: React.FC = () => {
           </div>
         )}
 
-        {/* Google 1-Click Button (Only for sign in or sign up) */}
+        {/* Google Sign-In */}
         {authModalMode !== 'forgot' && (
           <div className="mt-5 space-y-3">
             <button
@@ -147,7 +168,7 @@ export const AuthModal: React.FC = () => {
               className="flex w-full items-center justify-center gap-3 rounded-2xl border border-[#DCD5E0] bg-white py-2.5 px-4 text-xs font-semibold text-[#29272F] shadow-xs hover:bg-[#FAF8FC] hover:border-[#A99BEA] active:scale-[0.99] transition-all disabled:opacity-50"
             >
               {/* Google G Icon */}
-              <svg className="h-4 w-4" viewBox="0 0 24 24">
+              <svg className="h-4 w-4 shrink-0" viewBox="0 0 24 24">
                 <path
                   fill="#4285F4"
                   d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92c-.26 1.37-1.04 2.53-2.21 3.31v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.09z"
@@ -165,13 +186,13 @@ export const AuthModal: React.FC = () => {
                   d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.06l3.66 2.84c.87-2.6 3.3-4.52 6.16-4.52z"
                 />
               </svg>
-              <span>Continue with Google</span>
+              <span>{isSubmitting ? 'Connecting to Google...' : 'Continue with Google'}</span>
             </button>
 
-            <div className="relative flex items-center justify-center">
+            <div className="relative flex items-center justify-center pt-1">
               <div className="w-full border-t border-[#EAE3EE]" />
-              <span className="relative bg-[#FAF8FC] px-3 text-[11px] font-medium text-[#898393]">
-                or with email
+              <span className="relative bg-[#FAF8FC] px-3 text-[11px] font-medium text-[#898393] whitespace-nowrap">
+                or email & password
               </span>
             </div>
           </div>
@@ -246,6 +267,7 @@ export const AuthModal: React.FC = () => {
                   type="button"
                   onClick={() => setShowPassword(!showPassword)}
                   className="absolute right-3 top-1/2 -translate-y-1/2 text-[#898393] hover:text-[#29272F]"
+                  aria-label={showPassword ? 'Hide password' : 'Show password'}
                 >
                   {showPassword ? <EyeOff className="h-3.5 w-3.5" /> : <Eye className="h-3.5 w-3.5" />}
                 </button>
@@ -326,7 +348,7 @@ export const AuthModal: React.FC = () => {
             onClick={handleClose}
             className="text-[11px] text-[#898393] hover:text-[#29272F]"
           >
-            Continue as Guest
+            Cancel
           </button>
         </div>
       </div>

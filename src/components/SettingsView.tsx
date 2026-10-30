@@ -14,22 +14,23 @@ import {
   Lock,
   Upload,
 } from 'lucide-react';
-import { UserSettings } from '../types/finance';
-import { createFullBackup, restoreFullBackup } from '../utils/storage';
+import { UserSettings, BackupData } from '../types/finance';
+import { createFullBackup } from '../utils/storage';
 import { getTodayString } from '../utils/formatters';
 import { useAuth } from '../context/AuthContext';
 
 interface SettingsViewProps {
   settings: UserSettings;
-  onUpdateSettings: (newSettings: UserSettings) => void;
+  onUpdateSettings: (newSettings: UserSettings) => Promise<boolean> | void;
   stats: {
     transactionsCount: number;
     budgetsCount: number;
     goalsCount: number;
     recurringCount: number;
   };
-  onResetDemoData: () => void;
-  onWipeAllData: () => void;
+  onCreateBackup?: () => BackupData;
+  onResetDemoData: () => Promise<boolean> | void;
+  onWipeAllData: () => Promise<boolean> | void;
 }
 
 const CURRENCIES = [
@@ -49,6 +50,7 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
   settings,
   onUpdateSettings,
   stats,
+  onCreateBackup,
   onResetDemoData,
   onWipeAllData,
 }) => {
@@ -60,19 +62,21 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
   const [confirmWipe, setConfirmWipe] = useState(false);
   const [statusMessage, setStatusMessage] = useState<string | null>(null);
 
-  const handleSaveSettings = () => {
+  const handleSaveSettings = async () => {
     const curr = CURRENCIES.find((c) => c.code === selectedCurrencyCode) || settings.currency;
-    onUpdateSettings({
+    const ok = await onUpdateSettings({
       ...settings,
       currency: curr,
       targetSavingsRate: Number(targetRate),
     });
-    setStatusMessage('Preferences updated successfully.');
-    setTimeout(() => setStatusMessage(null), 3000);
+    if (ok !== false) {
+      setStatusMessage('Preferences updated successfully.');
+      setTimeout(() => setStatusMessage(null), 3000);
+    }
   };
 
   const handleDownloadBackup = () => {
-    const backup = createFullBackup();
+    const backup = onCreateBackup ? onCreateBackup() : createFullBackup();
     const str = JSON.stringify(backup, null, 2);
     const blob = new Blob([str], { type: 'application/json' });
     const url = URL.createObjectURL(blob);
@@ -365,10 +369,12 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
         ) : (
           <div className="flex items-center gap-3">
             <button
-              onClick={() => {
-                onWipeAllData();
+              onClick={async () => {
+                const ok = await onWipeAllData();
                 setConfirmWipe(false);
-                setStatusMessage('All personal data cleared.');
+                if (ok !== false) {
+                  setStatusMessage('All personal data cleared.');
+                }
               }}
               className="rounded-xl bg-rose-600 px-4 py-2 text-xs font-semibold text-white shadow-xs hover:bg-rose-700"
             >

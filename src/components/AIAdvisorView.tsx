@@ -6,15 +6,15 @@ import {
   User,
   RefreshCw,
   TrendingUp,
-  TrendingDown,
   PieChart,
   Target,
   Repeat,
   ShieldCheck,
   AlertTriangle,
+  AlertCircle,
   Copy,
   Check,
-  ArrowRight,
+  X,
 } from 'lucide-react';
 import { Transaction, Budget, SavingsGoal, RecurringRule } from '../types/finance';
 import { formatCurrency, getMonthLabel } from '../utils/formatters';
@@ -36,17 +36,17 @@ const CATEGORIZED_PROMPTS = [
   {
     category: 'Cashflow',
     icon: TrendingUp,
-    text: "Summarize this month's cashflow and spending",
+    text: "Summarize this month's income and expenses in simple language",
   },
   {
     category: '50/30/20',
     icon: PieChart,
-    text: 'Calculate a 50/30/20 budget recommendation for my income',
+    text: 'Calculate a 50/30/20 budget recommendation from my recorded data',
   },
   {
-    category: 'Budget Audit',
+    category: 'Anomalies',
     icon: AlertTriangle,
-    text: 'Where am I overspending and how can I fix it?',
+    text: 'Are there any unusual spending patterns or budget overruns?',
   },
   {
     category: 'Subscriptions',
@@ -59,9 +59,9 @@ const CATEGORIZED_PROMPTS = [
     text: 'How can I reach my savings goals faster?',
   },
   {
-    category: 'Wealth Habits',
+    category: 'Budgeting',
     icon: ShieldCheck,
-    text: 'What are 3 practical steps to increase my savings rate this month?',
+    text: 'Give me 3 practical budgeting suggestions based on my spending',
   },
 ];
 
@@ -78,37 +78,39 @@ export const AIAdvisorView: React.FC<AIAdvisorViewProps> = ({
   const {
     messages,
     isLoading,
+    error,
+    canRetry,
     sendMessage,
+    retryLastMessage,
+    dismissError,
     clearChat,
     markChatAsRead,
     setWelcomeIfNeeded,
   } = useAIChat();
 
   const [input, setInput] = useState('');
+  const [inputHint, setInputHint] = useState<string | null>(null);
   const [copiedId, setCopiedId] = useState<string | null>(null);
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLInputElement>(null);
 
-  // Auto scroll when messages update
   const scrollToBottom = () => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
   };
 
   useEffect(() => {
     scrollToBottom();
-  }, [messages, isLoading]);
+  }, [messages, isLoading, error]);
 
-  // Mark chat as read when viewing this component
   useEffect(() => {
     markChatAsRead();
   }, [markChatAsRead]);
 
-  // Update welcome message with user name if newly available
   useEffect(() => {
     setWelcomeIfNeeded(userName, getMonthLabel(selectedMonth), transactions.length);
   }, [userName, selectedMonth, transactions.length, setWelcomeIfNeeded]);
 
-  // Build comprehensive financial snapshot
+  // Build comprehensive financial snapshot strictly from the active user's records
   const financialSnapshot = useMemo(() => {
     return buildDetailedFinancialSnapshot(
       transactions,
@@ -132,9 +134,21 @@ export const AIAdvisorView: React.FC<AIAdvisorViewProps> = ({
   ]);
 
   const handleSend = (text: string) => {
-    if (!text.trim() || isLoading) return;
-    sendMessage(text, financialSnapshot, userName);
+    const trimmed = text.trim();
+    if (!trimmed) {
+      setInputHint('Please enter a question before sending.');
+      inputRef.current?.focus();
+      return;
+    }
+    if (isLoading) return;
+    setInputHint(null);
+    void sendMessage(trimmed, financialSnapshot, userName);
     setInput('');
+  };
+
+  const handleRetry = () => {
+    if (isLoading) return;
+    void retryLastMessage(financialSnapshot, userName);
   };
 
   const handleCopy = (id: string, text: string) => {
@@ -161,9 +175,14 @@ export const AIAdvisorView: React.FC<AIAdvisorViewProps> = ({
 
         if (rows.length >= 2) {
           const header = rows[0];
-          const body = rows.slice(1).filter((r) => !r.every((c) => c.startsWith(':---') || c.startsWith('---')));
+          const body = rows
+            .slice(1)
+            .filter((r) => !r.every((c) => c.startsWith(':---') || c.startsWith('---')));
           elements.push(
-            <div key={`table_${elements.length}`} className="my-3 overflow-x-auto rounded-xl border border-[#ECE7F0] bg-white">
+            <div
+              key={`table_${elements.length}`}
+              className="my-3 overflow-x-auto rounded-xl border border-[#ECE7F0] bg-white"
+            >
               <table className="w-full text-left text-xs border-collapse">
                 <thead>
                   <tr className="bg-[#F8F6FA] border-b border-[#ECE7F0] text-[#554C63]">
@@ -205,15 +224,30 @@ export const AIAdvisorView: React.FC<AIAdvisorViewProps> = ({
         flushTable();
       }
 
-      if (trimmed.startsWith('### ')) {
+      if (trimmed.startsWith('#### ')) {
         elements.push(
-          <h4 key={idx} className="mt-3 mb-1.5 font-['Plus_Jakarta_Sans'] text-sm font-bold text-[#2A2338]">
+          <h5
+            key={idx}
+            className="mt-2.5 mb-1 font-['Plus_Jakarta_Sans'] text-xs font-bold text-[#2A2338]"
+          >
+            {trimmed.replace('#### ', '')}
+          </h5>
+        );
+      } else if (trimmed.startsWith('### ')) {
+        elements.push(
+          <h4
+            key={idx}
+            className="mt-3 mb-1.5 font-['Plus_Jakarta_Sans'] text-sm font-bold text-[#2A2338]"
+          >
             {trimmed.replace('### ', '')}
           </h4>
         );
       } else if (trimmed.startsWith('## ')) {
         elements.push(
-          <h3 key={idx} className="mt-3.5 mb-2 font-['Plus_Jakarta_Sans'] text-base font-bold text-[#2A2338]">
+          <h3
+            key={idx}
+            className="mt-3.5 mb-2 font-['Plus_Jakarta_Sans'] text-base font-bold text-[#2A2338]"
+          >
             {trimmed.replace('## ', '')}
           </h3>
         );
@@ -253,7 +287,6 @@ export const AIAdvisorView: React.FC<AIAdvisorViewProps> = ({
   };
 
   const formatInlineMarkdown = (text: string) => {
-    // Replace **bold**
     const parts = text.split(/(\*\*.*?\*\*)/g);
     return parts.map((part, i) => {
       if (part.startsWith('**') && part.endsWith('**')) {
@@ -286,12 +319,13 @@ export const AIAdvisorView: React.FC<AIAdvisorViewProps> = ({
               Financial Advisor & Intelligence
             </h2>
             <p className="mt-1 text-xs text-[#6F677A] max-w-xl">
-              Real-time cashflow analysis, 50/30/20 allocation blueprints, budget audits, and savings goals acceleration.
+              Real-time cashflow analysis, 50/30/20 allocation blueprints, spending anomaly checks, and savings goals acceleration.
             </p>
           </div>
 
           <div className="flex items-center gap-2 sm:self-center">
             <button
+              type="button"
               onClick={clearChat}
               className="flex items-center gap-1.5 rounded-xl border border-[#E4DDEB] bg-white px-3 py-1.5 text-xs font-semibold text-[#665D73] hover:bg-[#F9F7FA] hover:text-[#2A2338] transition-all"
             >
@@ -304,25 +338,38 @@ export const AIAdvisorView: React.FC<AIAdvisorViewProps> = ({
         {/* Live Metrics Quick Strip */}
         <div className="mt-5 grid grid-cols-2 gap-2.5 sm:grid-cols-4 pt-4 border-t border-[#F2EDF5]">
           <div className="rounded-2xl border border-[#EFEBF4] bg-[#FAF8FC] p-3">
-            <div className="text-[10px] font-bold uppercase tracking-wider text-[#797285]">Recorded Inflow</div>
+            <div className="text-[10px] font-bold uppercase tracking-wider text-[#797285]">
+              Recorded Inflow
+            </div>
             <div className="mt-1 font-['Plus_Jakarta_Sans'] text-sm font-bold text-[#3B7A57]">
               {formatCurrency(financialSnapshot.income, currencySymbol)}
             </div>
           </div>
           <div className="rounded-2xl border border-[#EFEBF4] bg-[#FAF8FC] p-3">
-            <div className="text-[10px] font-bold uppercase tracking-wider text-[#797285]">Recorded Outflow</div>
+            <div className="text-[10px] font-bold uppercase tracking-wider text-[#797285]">
+              Recorded Outflow
+            </div>
             <div className="mt-1 font-['Plus_Jakarta_Sans'] text-sm font-bold text-[#8C3A4F]">
               {formatCurrency(financialSnapshot.expenses, currencySymbol)}
             </div>
           </div>
           <div className="rounded-2xl border border-[#EFEBF4] bg-[#FAF8FC] p-3">
-            <div className="text-[10px] font-bold uppercase tracking-wider text-[#797285]">Net Cashflow</div>
-            <div className={`mt-1 font-['Plus_Jakarta_Sans'] text-sm font-bold ${financialSnapshot.net >= 0 ? 'text-[#3B7A57]' : 'text-[#8C3A4F]'}`}>
-              {financialSnapshot.net >= 0 ? '+' : ''}{formatCurrency(financialSnapshot.net, currencySymbol)}
+            <div className="text-[10px] font-bold uppercase tracking-wider text-[#797285]">
+              Net Cashflow
+            </div>
+            <div
+              className={`mt-1 font-['Plus_Jakarta_Sans'] text-sm font-bold ${
+                financialSnapshot.net >= 0 ? 'text-[#3B7A57]' : 'text-[#8C3A4F]'
+              }`}
+            >
+              {financialSnapshot.net >= 0 ? '+' : ''}
+              {formatCurrency(financialSnapshot.net, currencySymbol)}
             </div>
           </div>
           <div className="rounded-2xl border border-[#EFEBF4] bg-[#FAF8FC] p-3">
-            <div className="text-[10px] font-bold uppercase tracking-wider text-[#797285]">Health Score</div>
+            <div className="text-[10px] font-bold uppercase tracking-wider text-[#797285]">
+              Health Score
+            </div>
             <div className="mt-1 font-['Plus_Jakarta_Sans'] text-sm font-bold text-[#7867B5] flex items-center gap-1.5">
               <span>{financialSnapshot.healthScore}/100</span>
               <span className="text-[10px] font-normal text-[#797285]">
@@ -344,6 +391,7 @@ export const AIAdvisorView: React.FC<AIAdvisorViewProps> = ({
               return (
                 <button
                   key={idx}
+                  type="button"
                   onClick={() => handleSend(item.text)}
                   disabled={isLoading}
                   className="group flex items-center gap-1.5 rounded-xl border border-[#E4DDEB] bg-white px-3 py-1.5 text-xs text-[#483F57] hover:border-[#7867B5] hover:bg-[#F7F4FB] hover:text-[#7867B5] active:scale-95 transition-all text-left disabled:opacity-50"
@@ -379,16 +427,16 @@ export const AIAdvisorView: React.FC<AIAdvisorViewProps> = ({
               </div>
 
               <div
-                className={`relative group rounded-2xl p-4 text-xs leading-relaxed shadow-xs ${
+                className={`relative group rounded-2xl p-4 text-xs leading-relaxed shadow-xs min-w-0 ${
                   m.sender === 'user'
                     ? 'bg-[#7867B5] text-white'
                     : 'border border-[#ECE7F0] bg-[#FAF8FC] text-[#29272F]'
                 }`}
               >
                 {m.sender === 'assistant' ? (
-                  <div className="space-y-1">{renderMessageContent(m.text)}</div>
+                  <div className="space-y-1 break-words">{renderMessageContent(m.text)}</div>
                 ) : (
-                  <div className="whitespace-pre-wrap">{m.text}</div>
+                  <div className="whitespace-pre-wrap break-words">{m.text}</div>
                 )}
 
                 <div
@@ -399,8 +447,9 @@ export const AIAdvisorView: React.FC<AIAdvisorViewProps> = ({
                   <span>{m.timestamp}</span>
                   {m.sender === 'assistant' && (
                     <button
+                      type="button"
                       onClick={() => handleCopy(m.id, m.text)}
-                      className="opacity-0 group-hover:opacity-100 flex items-center gap-1 text-[10px] text-[#7867B5] hover:underline transition-opacity"
+                      className="opacity-100 sm:opacity-0 sm:group-hover:opacity-100 flex items-center gap-1 text-[10px] text-[#7867B5] hover:underline transition-opacity"
                     >
                       {copiedId === m.id ? (
                         <>
@@ -426,9 +475,9 @@ export const AIAdvisorView: React.FC<AIAdvisorViewProps> = ({
                 <Bot className="h-4 w-4" />
               </div>
               <div className="flex items-center gap-2.5 rounded-2xl border border-[#ECE7F0] bg-[#FAF8FC] px-4 py-3 shadow-xs">
-                <RefreshCw className="h-3.5 w-3.5 animate-spin text-[#7867B5]" />
+                <RefreshCw className="h-3.5 w-3.5 animate-spin text-[#7867B5] shrink-0" />
                 <span className="font-medium text-[#4D4559]">
-                  FinPilot AI is synthesizing your financial data...
+                  FinPilot AI is analyzing your financial data...
                 </span>
                 <span className="text-[10px] text-[#8C8397] hidden sm:inline">
                   (Safe to navigate across tabs anytime)
@@ -437,11 +486,48 @@ export const AIAdvisorView: React.FC<AIAdvisorViewProps> = ({
             </div>
           )}
 
+          {error && !isLoading && (
+            <div className="rounded-2xl border border-rose-200 bg-rose-50/95 p-4 text-xs text-rose-900 shadow-xs animate-in fade-in">
+              <div className="flex items-start justify-between gap-3">
+                <div className="flex items-start gap-2.5">
+                  <AlertCircle className="h-4 w-4 shrink-0 text-rose-600 mt-0.5" />
+                  <div>
+                    <div className="font-semibold text-rose-900">AI Request Failed</div>
+                    <p className="mt-0.5 text-rose-800 leading-relaxed">{error}</p>
+                  </div>
+                </div>
+                <button
+                  type="button"
+                  onClick={dismissError}
+                  className="rounded-lg p-1 text-rose-500 hover:bg-rose-100 hover:text-rose-700"
+                  aria-label="Dismiss error"
+                >
+                  <X className="h-3.5 w-3.5" />
+                </button>
+              </div>
+              {canRetry && (
+                <div className="mt-3 flex items-center gap-2 pl-6">
+                  <button
+                    type="button"
+                    onClick={handleRetry}
+                    className="inline-flex items-center gap-1.5 rounded-xl bg-rose-600 px-3 py-1.5 text-xs font-semibold text-white hover:bg-rose-700 active:scale-95 transition-all"
+                  >
+                    <RefreshCw className="h-3.5 w-3.5" />
+                    <span>Retry Request</span>
+                  </button>
+                </div>
+              )}
+            </div>
+          )}
+
           <div ref={messagesEndRef} />
         </div>
 
         {/* Input Bar */}
         <div className="border-t border-[#F0EBF2] bg-[#FAF8FB] p-3 sm:p-4">
+          {inputHint && (
+            <div className="mb-2 text-[11px] font-medium text-amber-700 px-1">{inputHint}</div>
+          )}
           <form
             onSubmit={(e) => {
               e.preventDefault();
@@ -452,14 +538,20 @@ export const AIAdvisorView: React.FC<AIAdvisorViewProps> = ({
             <input
               ref={inputRef}
               type="text"
+              maxLength={2000}
               placeholder={
                 userName
-                  ? `Ask your financial copilot, ${userName}...`
-                  : 'Ask about cashflow, 50/30/20 breakdown, budget cuts, or savings...'
+                  ? `Ask a question or follow-up, ${userName}...`
+                  : 'Ask about income, expenses, unusual spending, budgets, or follow-ups...'
               }
               value={input}
-              onChange={(e) => setInput(e.target.value)}
-              className="flex-1 rounded-xl border border-[#E2D9E8] bg-white px-3.5 sm:px-4 py-2.5 text-xs text-[#29272F] outline-none focus:border-[#7867B5] focus:ring-2 focus:ring-[#7867B5]/20 transition-all shadow-inner"
+              onChange={(e) => {
+                setInput(e.target.value);
+                if (inputHint && e.target.value.trim()) {
+                  setInputHint(null);
+                }
+              }}
+              className="flex-1 min-w-0 rounded-xl border border-[#E2D9E8] bg-white px-3.5 sm:px-4 py-2.5 text-xs text-[#29272F] outline-none focus:border-[#7867B5] focus:ring-2 focus:ring-[#7867B5]/20 transition-all shadow-inner"
             />
             <button
               type="submit"
@@ -471,7 +563,7 @@ export const AIAdvisorView: React.FC<AIAdvisorViewProps> = ({
             </button>
           </form>
           <div className="mt-2 text-[10px] text-center text-[#898393]">
-            FinPilot AI Copilot provides educational financial planning based on your recorded ledger, not certified tax or legal advice.
+            FinPilot AI Copilot analyzes only your active financial records and distinguishes recorded figures from general budgeting suggestions.
           </div>
         </div>
       </div>

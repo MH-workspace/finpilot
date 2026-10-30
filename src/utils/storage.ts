@@ -40,7 +40,7 @@ export function saveSettings(settings: UserSettings): void {
   try {
     localStorage.setItem(STORAGE_KEYS.SETTINGS, JSON.stringify(settings));
   } catch (e) {
-    console.error('Failed to save settings:', e);
+    console.error('Failed to save guest settings:', e);
   }
 }
 
@@ -51,7 +51,7 @@ export function loadTransactions(): Transaction[] {
       return seedInitialTransactions();
     }
     const parsed = JSON.parse(raw);
-    return Array.isArray(parsed) && parsed.length > 0 ? parsed : seedInitialTransactions();
+    return Array.isArray(parsed) ? parsed : seedInitialTransactions();
   } catch {
     return seedInitialTransactions();
   }
@@ -61,7 +61,7 @@ export function saveTransactions(data: Transaction[]): void {
   try {
     localStorage.setItem(STORAGE_KEYS.TRANSACTIONS, JSON.stringify(data));
   } catch (e) {
-    console.error('Failed to save transactions:', e);
+    console.error('Failed to save guest transactions:', e);
   }
 }
 
@@ -72,7 +72,7 @@ export function loadBudgets(): Budget[] {
       return seedInitialBudgets();
     }
     const parsed = JSON.parse(raw);
-    return Array.isArray(parsed) && parsed.length > 0 ? parsed : seedInitialBudgets();
+    return Array.isArray(parsed) ? parsed : seedInitialBudgets();
   } catch {
     return seedInitialBudgets();
   }
@@ -82,7 +82,7 @@ export function saveBudgets(data: Budget[]): void {
   try {
     localStorage.setItem(STORAGE_KEYS.BUDGETS, JSON.stringify(data));
   } catch (e) {
-    console.error('Failed to save budgets:', e);
+    console.error('Failed to save guest budgets:', e);
   }
 }
 
@@ -93,7 +93,7 @@ export function loadGoals(): SavingsGoal[] {
       return seedInitialGoals();
     }
     const parsed = JSON.parse(raw);
-    return Array.isArray(parsed) && parsed.length > 0 ? parsed : seedInitialGoals();
+    return Array.isArray(parsed) ? parsed : seedInitialGoals();
   } catch {
     return seedInitialGoals();
   }
@@ -103,7 +103,7 @@ export function saveGoals(data: SavingsGoal[]): void {
   try {
     localStorage.setItem(STORAGE_KEYS.GOALS, JSON.stringify(data));
   } catch (e) {
-    console.error('Failed to save goals:', e);
+    console.error('Failed to save guest goals:', e);
   }
 }
 
@@ -114,7 +114,7 @@ export function loadRecurring(): RecurringRule[] {
       return seedInitialRecurring();
     }
     const parsed = JSON.parse(raw);
-    return Array.isArray(parsed) && parsed.length > 0 ? parsed : seedInitialRecurring();
+    return Array.isArray(parsed) ? parsed : seedInitialRecurring();
   } catch {
     return seedInitialRecurring();
   }
@@ -124,14 +124,20 @@ export function saveRecurring(data: RecurringRule[]): void {
   try {
     localStorage.setItem(STORAGE_KEYS.RECURRING, JSON.stringify(data));
   } catch (e) {
-    console.error('Failed to save recurring rules:', e);
+    console.error('Failed to save guest recurring rules:', e);
   }
 }
 
-// Initial Realistic Seed Data
-function seedInitialTransactions(): Transaction[] {
+export function buildSampleDataset(): {
+  transactions: Transaction[];
+  budgets: Budget[];
+  goals: SavingsGoal[];
+  recurring: RecurringRule[];
+} {
   const currentMonth = getMonthString();
-  const seed: Transaction[] = [
+  const today = getTodayString();
+
+  const transactions: Transaction[] = [
     {
       id: 'tx_seed_1',
       date: `${currentMonth}-01`,
@@ -217,12 +223,8 @@ function seedInitialTransactions(): Transaction[] {
       amount: 1199,
     },
   ];
-  saveTransactions(seed);
-  return seed;
-}
 
-function seedInitialBudgets(): Budget[] {
-  const seed: Budget[] = [
+  const budgets: Budget[] = [
     { category: 'Food', monthlyLimit: 12000 },
     { category: 'Bills', monthlyLimit: 28000 },
     { category: 'Transport', monthlyLimit: 5000 },
@@ -230,12 +232,8 @@ function seedInitialBudgets(): Budget[] {
     { category: 'Entertainment', monthlyLimit: 4000 },
     { category: 'Health', monthlyLimit: 6000 },
   ];
-  saveBudgets(seed);
-  return seed;
-}
 
-function seedInitialGoals(): SavingsGoal[] {
-  const seed: SavingsGoal[] = [
+  const goals: SavingsGoal[] = [
     {
       id: 'goal_1',
       name: 'Emergency Fund (6 Months)',
@@ -261,13 +259,8 @@ function seedInitialGoals(): SavingsGoal[] {
       notes: 'Flights and ryokan bookings',
     },
   ];
-  saveGoals(seed);
-  return seed;
-}
 
-function seedInitialRecurring(): RecurringRule[] {
-  const today = getTodayString();
-  const seed: RecurringRule[] = [
+  const recurring: RecurringRule[] = [
     {
       id: 'rec_1',
       description: 'Monthly Salary',
@@ -309,11 +302,53 @@ function seedInitialRecurring(): RecurringRule[] {
       active: true,
     },
   ];
-  saveRecurring(seed);
-  return seed;
+
+  return { transactions, budgets, goals, recurring };
 }
 
-export function createFullBackup(): BackupData {
+function seedInitialTransactions(): Transaction[] {
+  const { transactions } = buildSampleDataset();
+  saveTransactions(transactions);
+  return transactions;
+}
+
+function seedInitialBudgets(): Budget[] {
+  const { budgets } = buildSampleDataset();
+  saveBudgets(budgets);
+  return budgets;
+}
+
+function seedInitialGoals(): SavingsGoal[] {
+  const { goals } = buildSampleDataset();
+  saveGoals(goals);
+  return goals;
+}
+
+function seedInitialRecurring(): RecurringRule[] {
+  const { recurring } = buildSampleDataset();
+  saveRecurring(recurring);
+  return recurring;
+}
+
+export function createFullBackup(liveData?: {
+  transactions: Transaction[];
+  budgets: Budget[];
+  goals: SavingsGoal[];
+  recurring: RecurringRule[];
+  settings?: UserSettings;
+}): BackupData {
+  if (liveData) {
+    return {
+      format: 'finpilot-backup-v2',
+      createdAt: new Date().toISOString(),
+      transactions: liveData.transactions,
+      budgets: liveData.budgets,
+      goals: liveData.goals,
+      recurring: liveData.recurring,
+      settings: liveData.settings,
+    };
+  }
+
   return {
     format: 'finpilot-backup-v2',
     createdAt: new Date().toISOString(),
@@ -325,63 +360,90 @@ export function createFullBackup(): BackupData {
   };
 }
 
-export function restoreFullBackup(data: BackupData): {
-  transactionsCount: number;
-  budgetsCount: number;
-  goalsCount: number;
-  recurringCount: number;
+export function parseBackupForMerge(
+  data: BackupData,
+  existingTransactions: Transaction[]
+): {
+  mergedTransactions: Transaction[];
+  addedTransactions: Transaction[];
+  budgets: Budget[];
+  goals: SavingsGoal[];
+  recurring: RecurringRule[];
+  settings?: UserSettings;
 } {
   if (data.format !== 'finpilot-backup-v2' && (data as any).format !== 'finpilot-backup-v1') {
     throw new Error('Unsupported backup format. Must be finpilot-backup-v2.');
   }
 
-  // Merge or restore
-  const existingTx = loadTransactions();
   const newTx = Array.isArray(data.transactions) ? data.transactions : [];
-  const mergedTx = [...existingTx];
-  let txAdded = 0;
+  const mergedTransactions = [...existingTransactions];
+  const addedTransactions: Transaction[] = [];
 
   for (const item of newTx) {
-    const isDup = mergedTx.some(
+    if (!item || !item.date || !item.description || !(Number(item.amount) > 0)) continue;
+    const isDup = mergedTransactions.some(
       (m) =>
         m.date === item.date &&
         m.description.trim().toLowerCase() === item.description.trim().toLowerCase() &&
-        Math.abs(m.amount - item.amount) < 0.005
+        Math.abs(m.amount - Number(item.amount)) < 0.005
     );
     if (!isDup) {
-      mergedTx.push({
-        id: item.id || `tx_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`,
+      const normalized: Transaction = {
+        id:
+          typeof item.id === 'string' && item.id.trim()
+            ? item.id.trim()
+            : `tx_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`,
         date: item.date,
         description: item.description,
         category: item.category || 'Other',
         type: item.type === 'Income' ? 'Income' : 'Expense',
         amount: Number(item.amount),
         notes: item.notes || '',
-      });
-      txAdded++;
+      };
+      mergedTransactions.push(normalized);
+      addedTransactions.push(normalized);
     }
   }
 
-  saveTransactions(mergedTx);
+  return {
+    mergedTransactions,
+    addedTransactions,
+    budgets: Array.isArray(data.budgets) ? data.budgets : [],
+    goals: Array.isArray(data.goals) ? data.goals : [],
+    recurring: Array.isArray(data.recurring) ? data.recurring : [],
+    settings: data.settings,
+  };
+}
 
-  if (Array.isArray(data.budgets) && data.budgets.length > 0) {
-    saveBudgets(data.budgets);
+export function restoreFullBackup(data: BackupData): {
+  transactionsCount: number;
+  budgetsCount: number;
+  goalsCount: number;
+  recurringCount: number;
+} {
+  const existingTx = loadTransactions();
+  const parsed = parseBackupForMerge(data, existingTx);
+
+  saveTransactions(parsed.mergedTransactions);
+
+  if (parsed.budgets.length > 0) {
+    saveBudgets(parsed.budgets);
   }
-  if (Array.isArray(data.goals) && data.goals.length > 0) {
-    saveGoals(data.goals);
+  if (parsed.goals.length > 0) {
+    saveGoals(parsed.goals);
   }
-  if (Array.isArray(data.recurring) && data.recurring.length > 0) {
-    saveRecurring(data.recurring);
+  if (parsed.recurring.length > 0) {
+    saveRecurring(parsed.recurring);
   }
-  if (data.settings) {
-    saveSettings(data.settings);
+  if (parsed.settings) {
+    saveSettings(parsed.settings);
   }
 
   return {
-    transactionsCount: txAdded,
-    budgetsCount: data.budgets?.length || 0,
-    goalsCount: data.goals?.length || 0,
-    recurringCount: data.recurring?.length || 0,
+    transactionsCount: parsed.addedTransactions.length,
+    budgetsCount: parsed.budgets.length,
+    goalsCount: parsed.goals.length,
+    recurringCount: parsed.recurring.length,
   };
 }
 
@@ -397,10 +459,6 @@ export function resetToDemoData(): void {
 }
 
 export function clearAllUserData(): void {
-  localStorage.removeItem(STORAGE_KEYS.TRANSACTIONS);
-  localStorage.removeItem(STORAGE_KEYS.BUDGETS);
-  localStorage.removeItem(STORAGE_KEYS.GOALS);
-  localStorage.removeItem(STORAGE_KEYS.RECURRING);
   saveTransactions([]);
   saveBudgets([]);
   saveGoals([]);

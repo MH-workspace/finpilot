@@ -15,7 +15,7 @@ import {
   X,
   Tag,
 } from 'lucide-react';
-import { Transaction, TransactionType } from '../types/finance';
+import { Transaction, TransactionType, BackupData } from '../types/finance';
 import {
   formatCurrency,
   formatDate,
@@ -32,6 +32,13 @@ interface TransactionsViewProps {
   onUpdateTransaction: (id: string, tx: Omit<Transaction, 'id'>) => void;
   onDeleteTransaction: (id: string) => void;
   currencySymbol: string;
+  onCreateBackup?: () => BackupData;
+  onRestoreBackupData?: (data: BackupData) => Promise<{
+    transactionsCount: number;
+    budgetsCount: number;
+    goalsCount: number;
+    recurringCount: number;
+  }>;
   onDataRestored: () => void;
   onOpenEditModal: (tx: Transaction) => void;
 }
@@ -65,6 +72,8 @@ export const TransactionsView: React.FC<TransactionsViewProps> = ({
   onUpdateTransaction,
   onDeleteTransaction,
   currencySymbol,
+  onCreateBackup,
+  onRestoreBackupData,
   onDataRestored,
   onOpenEditModal,
 }) => {
@@ -325,16 +334,20 @@ export const TransactionsView: React.FC<TransactionsViewProps> = ({
     if (!csvPreview || csvPreview.valid.length === 0) return;
     let added = 0;
     for (const tx of csvPreview.valid) {
-      await onAddTransaction(tx);
-      added++;
+      const ok = await onAddTransaction(tx);
+      if (ok) added++;
     }
-    setImportStatus(`Successfully imported ${added} transactions.`);
+    setImportStatus(
+      added > 0
+        ? `Successfully imported ${added} transaction(s).`
+        : 'No new transactions were imported (duplicates skipped or save failed).'
+    );
     setCsvPreview(null);
   };
 
   // JSON Backup & Restore Handlers
   const handleDownloadJsonBackup = () => {
-    const backup = createFullBackup();
+    const backup = onCreateBackup ? onCreateBackup() : createFullBackup();
     const str = JSON.stringify(backup, null, 2);
     const blob = new Blob([str], { type: 'application/json' });
     const url = URL.createObjectURL(blob);
@@ -347,11 +360,13 @@ export const TransactionsView: React.FC<TransactionsViewProps> = ({
 
   const handleJsonRestoreUpload = (file: File) => {
     const reader = new FileReader();
-    reader.onload = (e) => {
+    reader.onload = async (e) => {
       try {
         const text = e.target?.result as string;
         const parsed = JSON.parse(text);
-        const stats = restoreFullBackup(parsed);
+        const stats = onRestoreBackupData
+          ? await onRestoreBackupData(parsed)
+          : restoreFullBackup(parsed);
         setRestoreStatus(
           `Backup restored: merged ${stats.transactionsCount} new transactions, ${stats.budgetsCount} budgets, ${stats.goalsCount} goals, and ${stats.recurringCount} recurring rules.`
         );

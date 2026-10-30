@@ -11,7 +11,7 @@ import {
 interface TransactionModalProps {
   isOpen: boolean;
   onClose: () => void;
-  onSave: (transaction: Omit<Transaction, 'id'>, id?: string) => void;
+  onSave: (transaction: Omit<Transaction, 'id'>, id?: string) => Promise<boolean> | boolean | void;
   existingTransaction?: Transaction | null;
   existingTransactions: Transaction[];
   currencySymbol: string;
@@ -35,6 +35,7 @@ export const TransactionModal: React.FC<TransactionModalProps> = ({
   const [notes, setNotes] = useState('');
   const [duplicateWarning, setDuplicateWarning] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [isSaving, setIsSaving] = useState(false);
 
   useEffect(() => {
     if (existingTransaction) {
@@ -54,6 +55,9 @@ export const TransactionModal: React.FC<TransactionModalProps> = ({
       setAmount(existingTransaction.amount.toString());
       setDate(existingTransaction.date);
       setNotes(existingTransaction.notes || '');
+      setDuplicateWarning(false);
+      setError(null);
+      setIsSaving(false);
     } else {
       resetForm();
     }
@@ -70,6 +74,7 @@ export const TransactionModal: React.FC<TransactionModalProps> = ({
     setNotes('');
     setDuplicateWarning(false);
     setError(null);
+    setIsSaving(false);
   };
 
   if (!isOpen) return null;
@@ -109,8 +114,9 @@ export const TransactionModal: React.FC<TransactionModalProps> = ({
     }
   };
 
-  const handleSubmit = (e: React.FormEvent, forceDuplicate = false) => {
+  const handleSubmit = async (e: React.FormEvent, forceDuplicate = false) => {
     e.preventDefault();
+    if (isSaving) return;
     setError(null);
 
     const parsedAmount = parseFloat(amount);
@@ -150,19 +156,31 @@ export const TransactionModal: React.FC<TransactionModalProps> = ({
       }
     }
 
-    onSave(
-      {
-        date,
-        description: description.trim(),
-        category: finalCategory,
-        type,
-        amount: parsedAmount,
-        notes: notes.trim(),
-      },
-      existingTransaction?.id
-    );
+    setIsSaving(true);
+    try {
+      const saved = await onSave(
+        {
+          date,
+          description: description.trim(),
+          category: finalCategory,
+          type,
+          amount: parsedAmount,
+          notes: notes.trim(),
+        },
+        existingTransaction?.id
+      );
 
-    onClose();
+      if (saved === false) {
+        setError('Could not save transaction to your cloud ledger. Please check your connection and try again.');
+        return;
+      }
+
+      onClose();
+    } catch (err: any) {
+      setError(err?.message || 'Could not save transaction. Please try again.');
+    } finally {
+      setIsSaving(false);
+    }
   };
 
   return (
@@ -366,15 +384,21 @@ export const TransactionModal: React.FC<TransactionModalProps> = ({
             <button
               type="button"
               onClick={onClose}
-              className="rounded-xl border border-[#DCD5E0] bg-white px-4 py-2 text-xs font-semibold text-[#665D70] hover:bg-[#F3EFF5] transition-colors"
+              disabled={isSaving}
+              className="rounded-xl border border-[#DCD5E0] bg-white px-4 py-2 text-xs font-semibold text-[#665D70] hover:bg-[#F3EFF5] transition-colors disabled:opacity-50"
             >
               Cancel
             </button>
             <button
               type="submit"
-              className="rounded-xl bg-gradient-to-r from-[#A99BEA] to-[#9282D7] px-5 py-2 text-xs font-semibold text-white shadow-md shadow-[#7867B5]/20 hover:brightness-105 active:scale-95 transition-all"
+              disabled={isSaving}
+              className="rounded-xl bg-gradient-to-r from-[#A99BEA] to-[#9282D7] px-5 py-2 text-xs font-semibold text-white shadow-md shadow-[#7867B5]/20 hover:brightness-105 active:scale-95 transition-all disabled:opacity-50"
             >
-              {existingTransaction ? 'Update Record' : 'Save Transaction'}
+              {isSaving
+                ? 'Saving...'
+                : existingTransaction
+                ? 'Update Record'
+                : 'Save Transaction'}
             </button>
           </div>
         </form>

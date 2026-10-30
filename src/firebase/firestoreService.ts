@@ -4,10 +4,16 @@ import {
   setDoc,
   deleteDoc,
   onSnapshot,
-  getDocs,
   writeBatch,
+  getDocs,
 } from 'firebase/firestore';
-import { db, handleFirestoreError, OperationType } from './config';
+import {
+  db,
+  handleFirestoreError,
+  getReadableFirestoreError,
+  OperationType,
+  sanitizeFirestoreId,
+} from './config';
 import {
   Transaction,
   Budget,
@@ -16,12 +22,36 @@ import {
   UserSettings,
 } from '../types/finance';
 
+export type FirestoreListenerErrorHandler = (readableMessage: string) => void;
+
+function reportSnapshotError(
+  error: unknown,
+  op: OperationType,
+  path: string,
+  onError?: FirestoreListenerErrorHandler
+): void {
+  let thrown: unknown = error;
+  try {
+    handleFirestoreError(error, op, path);
+  } catch (structuredErr) {
+    thrown = structuredErr;
+  }
+  if (onError) {
+    onError(getReadableFirestoreError(thrown));
+  }
+}
+
+function getBudgetDocId(category: string): string {
+  return sanitizeFirestoreId(category.toLowerCase(), 'budget');
+}
+
 /**
  * Real-time listener for user's transactions in Firestore
  */
 export function subscribeToTransactions(
   userId: string,
-  onUpdate: (transactions: Transaction[]) => void
+  onUpdate: (transactions: Transaction[]) => void,
+  onError?: FirestoreListenerErrorHandler
 ): () => void {
   const path = `users/${userId}/transactions`;
   const colRef = collection(db, 'users', userId, 'transactions');
@@ -34,20 +64,19 @@ export function subscribeToTransactions(
         const data = docSnap.data();
         items.push({
           id: data.id || docSnap.id,
-          date: data.date,
-          description: data.description,
-          category: data.category,
-          type: data.type,
-          amount: Number(data.amount),
-          notes: data.notes || '',
+          date: String(data.date || ''),
+          description: String(data.description || ''),
+          category: String(data.category || 'Other'),
+          type: data.type === 'Income' ? 'Income' : 'Expense',
+          amount: Number(data.amount) || 0,
+          notes: data.notes ? String(data.notes) : '',
         });
       });
-      // Sort newest first
       items.sort((a, b) => b.date.localeCompare(a.date));
       onUpdate(items);
     },
     (error) => {
-      handleFirestoreError(error, OperationType.LIST, path);
+      reportSnapshotError(error, OperationType.LIST, path, onError);
     }
   );
 }
@@ -57,7 +86,8 @@ export function subscribeToTransactions(
  */
 export function subscribeToBudgets(
   userId: string,
-  onUpdate: (budgets: Budget[]) => void
+  onUpdate: (budgets: Budget[]) => void,
+  onError?: FirestoreListenerErrorHandler
 ): () => void {
   const path = `users/${userId}/budgets`;
   const colRef = collection(db, 'users', userId, 'budgets');
@@ -68,16 +98,18 @@ export function subscribeToBudgets(
       const items: Budget[] = [];
       snapshot.forEach((docSnap) => {
         const data = docSnap.data();
-        items.push({
-          category: data.category,
-          monthlyLimit: Number(data.monthlyLimit),
-        });
+        if (data.category) {
+          items.push({
+            category: String(data.category),
+            monthlyLimit: Number(data.monthlyLimit) || 0,
+          });
+        }
       });
       items.sort((a, b) => a.category.localeCompare(b.category));
       onUpdate(items);
     },
     (error) => {
-      handleFirestoreError(error, OperationType.LIST, path);
+      reportSnapshotError(error, OperationType.LIST, path, onError);
     }
   );
 }
@@ -87,7 +119,8 @@ export function subscribeToBudgets(
  */
 export function subscribeToGoals(
   userId: string,
-  onUpdate: (goals: SavingsGoal[]) => void
+  onUpdate: (goals: SavingsGoal[]) => void,
+  onError?: FirestoreListenerErrorHandler
 ): () => void {
   const path = `users/${userId}/goals`;
   const colRef = collection(db, 'users', userId, 'goals');
@@ -100,17 +133,17 @@ export function subscribeToGoals(
         const data = docSnap.data();
         items.push({
           id: data.id || docSnap.id,
-          name: data.name,
-          targetAmount: Number(data.targetAmount),
-          savedAmount: Number(data.savedAmount),
-          targetDate: data.targetDate || undefined,
-          notes: data.notes || '',
+          name: String(data.name || ''),
+          targetAmount: Number(data.targetAmount) || 0,
+          savedAmount: Number(data.savedAmount) || 0,
+          targetDate: data.targetDate ? String(data.targetDate) : undefined,
+          notes: data.notes ? String(data.notes) : '',
         });
       });
       onUpdate(items);
     },
     (error) => {
-      handleFirestoreError(error, OperationType.LIST, path);
+      reportSnapshotError(error, OperationType.LIST, path, onError);
     }
   );
 }
@@ -120,7 +153,8 @@ export function subscribeToGoals(
  */
 export function subscribeToRecurring(
   userId: string,
-  onUpdate: (rules: RecurringRule[]) => void
+  onUpdate: (rules: RecurringRule[]) => void,
+  onError?: FirestoreListenerErrorHandler
 ): () => void {
   const path = `users/${userId}/recurring`;
   const colRef = collection(db, 'users', userId, 'recurring');
@@ -133,12 +167,12 @@ export function subscribeToRecurring(
         const data = docSnap.data();
         items.push({
           id: data.id || docSnap.id,
-          description: data.description,
-          category: data.category,
-          type: data.type,
-          amount: Number(data.amount),
+          description: String(data.description || ''),
+          category: String(data.category || 'Other'),
+          type: data.type === 'Income' ? 'Income' : 'Expense',
+          amount: Number(data.amount) || 0,
           frequency: data.frequency,
-          nextDate: data.nextDate,
+          nextDate: String(data.nextDate || ''),
           active: Boolean(data.active),
         });
       });
@@ -146,7 +180,7 @@ export function subscribeToRecurring(
       onUpdate(items);
     },
     (error) => {
-      handleFirestoreError(error, OperationType.LIST, path);
+      reportSnapshotError(error, OperationType.LIST, path, onError);
     }
   );
 }
@@ -156,7 +190,8 @@ export function subscribeToRecurring(
  */
 export function subscribeToUserSettings(
   userId: string,
-  onUpdate: (settings: UserSettings) => void
+  onUpdate: (settings: UserSettings) => void,
+  onError?: FirestoreListenerErrorHandler
 ): () => void {
   const path = `users/${userId}/settings/preferences`;
   const docRef = doc(db, 'users', userId, 'settings', 'preferences');
@@ -172,13 +207,13 @@ export function subscribeToUserSettings(
             code: data.currencyCode || 'INR',
             name: data.currencyName || 'Indian Rupee (₹)',
           },
-          targetSavingsRate: Number(data.targetSavingsRate || 20),
+          targetSavingsRate: Number(data.targetSavingsRate ?? 20),
           hasLoadedInitialData: true,
         });
       }
     },
     (error) => {
-      handleFirestoreError(error, OperationType.GET, path);
+      reportSnapshotError(error, OperationType.GET, path, onError);
     }
   );
 }
@@ -190,20 +225,21 @@ export async function saveTransactionToFirestore(
   userId: string,
   tx: Transaction
 ): Promise<void> {
-  const path = `users/${userId}/transactions/${tx.id}`;
+  const safeId = sanitizeFirestoreId(tx.id, 'tx');
+  const path = `users/${userId}/transactions/${safeId}`;
   try {
-    const docRef = doc(db, 'users', userId, 'transactions', tx.id);
+    const docRef = doc(db, 'users', userId, 'transactions', safeId);
     await setDoc(
       docRef,
       {
-        id: tx.id,
+        id: safeId,
         userId,
-        date: tx.date,
-        description: tx.description,
-        category: tx.category,
-        type: tx.type,
-        amount: tx.amount,
-        notes: tx.notes || '',
+        date: String(tx.date).slice(0, 32),
+        description: String(tx.description).trim().slice(0, 256),
+        category: String(tx.category || 'Other').trim().slice(0, 64),
+        type: tx.type === 'Income' ? 'Income' : 'Expense',
+        amount: Number(tx.amount),
+        notes: String(tx.notes || '').slice(0, 1000),
         updatedAt: new Date().toISOString(),
       },
       { merge: true }
@@ -220,9 +256,10 @@ export async function deleteTransactionFromFirestore(
   userId: string,
   transactionId: string
 ): Promise<void> {
-  const path = `users/${userId}/transactions/${transactionId}`;
+  const safeId = sanitizeFirestoreId(transactionId, 'tx');
+  const path = `users/${userId}/transactions/${safeId}`;
   try {
-    const docRef = doc(db, 'users', userId, 'transactions', transactionId);
+    const docRef = doc(db, 'users', userId, 'transactions', safeId);
     await deleteDoc(docRef);
   } catch (error) {
     handleFirestoreError(error, OperationType.DELETE, path);
@@ -237,7 +274,7 @@ export async function saveBudgetToFirestore(
   category: string,
   monthlyLimit: number
 ): Promise<void> {
-  const cleanId = category.toLowerCase().replace(/[^a-z0-9_-]/g, '_');
+  const cleanId = getBudgetDocId(category);
   const path = `users/${userId}/budgets/${cleanId}`;
   try {
     const docRef = doc(db, 'users', userId, 'budgets', cleanId);
@@ -246,8 +283,8 @@ export async function saveBudgetToFirestore(
       {
         id: cleanId,
         userId,
-        category,
-        monthlyLimit,
+        category: category.trim().slice(0, 64),
+        monthlyLimit: Number(monthlyLimit),
         updatedAt: new Date().toISOString(),
       },
       { merge: true }
@@ -264,7 +301,7 @@ export async function deleteBudgetFromFirestore(
   userId: string,
   category: string
 ): Promise<void> {
-  const cleanId = category.toLowerCase().replace(/[^a-z0-9_-]/g, '_');
+  const cleanId = getBudgetDocId(category);
   const path = `users/${userId}/budgets/${cleanId}`;
   try {
     const docRef = doc(db, 'users', userId, 'budgets', cleanId);
@@ -281,19 +318,20 @@ export async function saveGoalToFirestore(
   userId: string,
   goal: SavingsGoal
 ): Promise<void> {
-  const path = `users/${userId}/goals/${goal.id}`;
+  const safeId = sanitizeFirestoreId(goal.id, 'goal');
+  const path = `users/${userId}/goals/${safeId}`;
   try {
-    const docRef = doc(db, 'users', userId, 'goals', goal.id);
+    const docRef = doc(db, 'users', userId, 'goals', safeId);
     await setDoc(
       docRef,
       {
-        id: goal.id,
+        id: safeId,
         userId,
-        name: goal.name,
-        targetAmount: goal.targetAmount,
-        savedAmount: goal.savedAmount,
-        targetDate: goal.targetDate || '',
-        notes: goal.notes || '',
+        name: String(goal.name).trim().slice(0, 128),
+        targetAmount: Number(goal.targetAmount),
+        savedAmount: Number(goal.savedAmount),
+        targetDate: String(goal.targetDate || '').slice(0, 32),
+        notes: String(goal.notes || '').slice(0, 1000),
         updatedAt: new Date().toISOString(),
       },
       { merge: true }
@@ -310,9 +348,10 @@ export async function deleteGoalFromFirestore(
   userId: string,
   goalId: string
 ): Promise<void> {
-  const path = `users/${userId}/goals/${goalId}`;
+  const safeId = sanitizeFirestoreId(goalId, 'goal');
+  const path = `users/${userId}/goals/${safeId}`;
   try {
-    const docRef = doc(db, 'users', userId, 'goals', goalId);
+    const docRef = doc(db, 'users', userId, 'goals', safeId);
     await deleteDoc(docRef);
   } catch (error) {
     handleFirestoreError(error, OperationType.DELETE, path);
@@ -326,21 +365,22 @@ export async function saveRecurringToFirestore(
   userId: string,
   rule: RecurringRule
 ): Promise<void> {
-  const path = `users/${userId}/recurring/${rule.id}`;
+  const safeId = sanitizeFirestoreId(rule.id, 'rec');
+  const path = `users/${userId}/recurring/${safeId}`;
   try {
-    const docRef = doc(db, 'users', userId, 'recurring', rule.id);
+    const docRef = doc(db, 'users', userId, 'recurring', safeId);
     await setDoc(
       docRef,
       {
-        id: rule.id,
+        id: safeId,
         userId,
-        description: rule.description,
-        category: rule.category,
-        type: rule.type,
-        amount: rule.amount,
+        description: String(rule.description).trim().slice(0, 256),
+        category: String(rule.category || 'Other').trim().slice(0, 64),
+        type: rule.type === 'Income' ? 'Income' : 'Expense',
+        amount: Number(rule.amount),
         frequency: rule.frequency,
-        nextDate: rule.nextDate,
-        active: rule.active,
+        nextDate: String(rule.nextDate).slice(0, 32),
+        active: Boolean(rule.active),
         updatedAt: new Date().toISOString(),
       },
       { merge: true }
@@ -357,9 +397,10 @@ export async function deleteRecurringFromFirestore(
   userId: string,
   ruleId: string
 ): Promise<void> {
-  const path = `users/${userId}/recurring/${ruleId}`;
+  const safeId = sanitizeFirestoreId(ruleId, 'rec');
+  const path = `users/${userId}/recurring/${safeId}`;
   try {
-    const docRef = doc(db, 'users', userId, 'recurring', ruleId);
+    const docRef = doc(db, 'users', userId, 'recurring', safeId);
     await deleteDoc(docRef);
   } catch (error) {
     handleFirestoreError(error, OperationType.DELETE, path);
@@ -380,10 +421,10 @@ export async function saveUserSettingsToFirestore(
       docRef,
       {
         userId,
-        currencySymbol: settings.currency.symbol,
-        currencyCode: settings.currency.code,
-        currencyName: settings.currency.name,
-        targetSavingsRate: settings.targetSavingsRate,
+        currencySymbol: String(settings.currency.symbol).slice(0, 16),
+        currencyCode: String(settings.currency.code).slice(0, 16),
+        currencyName: String(settings.currency.name || '').slice(0, 64),
+        targetSavingsRate: Math.min(100, Math.max(0, Number(settings.targetSavingsRate))),
         updatedAt: new Date().toISOString(),
       },
       { merge: true }
@@ -394,31 +435,160 @@ export async function saveUserSettingsToFirestore(
 }
 
 /**
- * Bulk upload local data into Firestore for newly signed-in user
+ * Bulk upload data into Firestore for an authenticated user (used for sample dataset or JSON restore).
+ * Propagates errors to caller rather than failing silently.
  */
 export async function syncLocalDataToFirestore(
   userId: string,
-  localTransactions: Transaction[],
-  localBudgets: Budget[],
-  localGoals: SavingsGoal[],
-  localRecurring: RecurringRule[],
-  localSettings: UserSettings
+  transactionsToSync: Transaction[],
+  budgetsToSync: Budget[],
+  goalsToSync: SavingsGoal[],
+  recurringToSync: RecurringRule[],
+  settingsToSync?: UserSettings
 ): Promise<void> {
+  const nowIso = new Date().toISOString();
+  const operations: ((batch: ReturnType<typeof writeBatch>) => void)[] = [];
+
+  for (const tx of transactionsToSync) {
+    const safeId = sanitizeFirestoreId(tx.id, 'tx');
+    const docRef = doc(db, 'users', userId, 'transactions', safeId);
+    operations.push((batch) =>
+      batch.set(
+        docRef,
+        {
+          id: safeId,
+          userId,
+          date: String(tx.date).slice(0, 32),
+          description: String(tx.description).trim().slice(0, 256),
+          category: String(tx.category || 'Other').trim().slice(0, 64),
+          type: tx.type === 'Income' ? 'Income' : 'Expense',
+          amount: Number(tx.amount),
+          notes: String(tx.notes || '').slice(0, 1000),
+          updatedAt: nowIso,
+        },
+        { merge: true }
+      )
+    );
+  }
+
+  for (const b of budgetsToSync) {
+    const cleanId = getBudgetDocId(b.category);
+    const docRef = doc(db, 'users', userId, 'budgets', cleanId);
+    operations.push((batch) =>
+      batch.set(
+        docRef,
+        {
+          id: cleanId,
+          userId,
+          category: b.category.trim().slice(0, 64),
+          monthlyLimit: Number(b.monthlyLimit),
+          updatedAt: nowIso,
+        },
+        { merge: true }
+      )
+    );
+  }
+
+  for (const g of goalsToSync) {
+    const safeId = sanitizeFirestoreId(g.id, 'goal');
+    const docRef = doc(db, 'users', userId, 'goals', safeId);
+    operations.push((batch) =>
+      batch.set(
+        docRef,
+        {
+          id: safeId,
+          userId,
+          name: String(g.name).trim().slice(0, 128),
+          targetAmount: Number(g.targetAmount),
+          savedAmount: Number(g.savedAmount),
+          targetDate: String(g.targetDate || '').slice(0, 32),
+          notes: String(g.notes || '').slice(0, 1000),
+          updatedAt: nowIso,
+        },
+        { merge: true }
+      )
+    );
+  }
+
+  for (const r of recurringToSync) {
+    const safeId = sanitizeFirestoreId(r.id, 'rec');
+    const docRef = doc(db, 'users', userId, 'recurring', safeId);
+    operations.push((batch) =>
+      batch.set(
+        docRef,
+        {
+          id: safeId,
+          userId,
+          description: String(r.description).trim().slice(0, 256),
+          category: String(r.category || 'Other').trim().slice(0, 64),
+          type: r.type === 'Income' ? 'Income' : 'Expense',
+          amount: Number(r.amount),
+          frequency: r.frequency,
+          nextDate: String(r.nextDate).slice(0, 32),
+          active: Boolean(r.active),
+          updatedAt: nowIso,
+        },
+        { merge: true }
+      )
+    );
+  }
+
+  if (settingsToSync) {
+    const settingsRef = doc(db, 'users', userId, 'settings', 'preferences');
+    operations.push((batch) =>
+      batch.set(
+        settingsRef,
+        {
+          userId,
+          currencySymbol: String(settingsToSync.currency.symbol).slice(0, 16),
+          currencyCode: String(settingsToSync.currency.code).slice(0, 16),
+          currencyName: String(settingsToSync.currency.name || '').slice(0, 64),
+          targetSavingsRate: Math.min(100, Math.max(0, Number(settingsToSync.targetSavingsRate))),
+          updatedAt: nowIso,
+        },
+        { merge: true }
+      )
+    );
+  }
+
+  // Firestore writeBatch supports up to 500 writes per batch
+  const CHUNK_SIZE = 400;
   try {
-    for (const tx of localTransactions) {
-      await saveTransactionToFirestore(userId, tx);
+    for (let i = 0; i < operations.length; i += CHUNK_SIZE) {
+      const batch = writeBatch(db);
+      const slice = operations.slice(i, i + CHUNK_SIZE);
+      for (const applyOp of slice) {
+        applyOp(batch);
+      }
+      await batch.commit();
     }
-    for (const b of localBudgets) {
-      await saveBudgetToFirestore(userId, b.category, b.monthlyLimit);
-    }
-    for (const g of localGoals) {
-      await saveGoalToFirestore(userId, g);
-    }
-    for (const r of localRecurring) {
-      await saveRecurringToFirestore(userId, r);
-    }
-    await saveUserSettingsToFirestore(userId, localSettings);
   } catch (error) {
-    console.error('Failed to sync local data to Firestore:', error);
+    handleFirestoreError(error, OperationType.WRITE, `users/${userId}`);
+  }
+}
+
+/**
+ * Deletes all financial subcollection documents for the authenticated user.
+ */
+export async function wipeUserCloudData(userId: string): Promise<void> {
+  const subcollections = ['transactions', 'budgets', 'goals', 'recurring'] as const;
+  const refsToDelete: ReturnType<typeof doc>[] = [];
+
+  try {
+    for (const sub of subcollections) {
+      const snap = await getDocs(collection(db, 'users', userId, sub));
+      snap.forEach((d) => refsToDelete.push(d.ref));
+    }
+
+    const CHUNK_SIZE = 400;
+    for (let i = 0; i < refsToDelete.length; i += CHUNK_SIZE) {
+      const batch = writeBatch(db);
+      for (const ref of refsToDelete.slice(i, i + CHUNK_SIZE)) {
+        batch.delete(ref);
+      }
+      await batch.commit();
+    }
+  } catch (error) {
+    handleFirestoreError(error, OperationType.DELETE, `users/${userId}`);
   }
 }
